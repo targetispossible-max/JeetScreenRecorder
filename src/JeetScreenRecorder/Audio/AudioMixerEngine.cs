@@ -8,22 +8,22 @@ namespace JeetScreenRecorder.Audio
 {
     public class AudioMixerEngine : IAudioCaptureService, IDisposable
     {
-        private WasapiLoopbackCapture _loopbackCapture;
-        private WaveInEvent _micCapture;
-        private BufferedWaveProvider _loopbackBuffer;
-        private BufferedWaveProvider _micBuffer;
-        private Stream _destinationStream;
+        private WasapiLoopbackCapture? _loopbackCapture;
+        private WaveInEvent? _micCapture;
+        private BufferedWaveProvider? _loopbackBuffer;
+        private BufferedWaveProvider? _micBuffer;
+        private Stream? _destinationStream;
 
         private bool _captureSystem = true;
         private bool _captureMic = false;
-        private string _selectedMicDevice;
+        private string? _selectedMicDevice;
         private double _systemGain = 1.0;
         private double _micGain = 1.0;
 
         private readonly object _lockObject = new object();
 
         public bool IsRunning { get; private set; }
-        public event EventHandler<string> Warning;
+        public event EventHandler<string>? Warning;
 
         public int SampleRate { get; private set; } = 48000;
         public int Channels { get; } = 2;
@@ -40,7 +40,7 @@ namespace JeetScreenRecorder.Audio
                 for (int i = 0; i < WaveIn.DeviceCount; i++)
                 {
                     var caps = WaveIn.GetCapabilities(i);
-                    mics.Add(new AudioDeviceInfo(caps.ProductName, i.ToString()));
+                    mics.Add(new AudioDeviceInfo(caps.ProductName, i.ToString(), default(AudioDeviceKind)));
                 }
             }
             catch (Exception ex)
@@ -50,14 +50,14 @@ namespace JeetScreenRecorder.Audio
             return mics;
         }
 
-        public void SetSink(Stream stream)
+        public void SetSink(Stream? sink)
         {
-            _destinationStream = stream;
+            _destinationStream = sink;
         }
 
-        public void SetMicDevice(string deviceId)
+        public void SetMicDevice(string? micDeviceId)
         {
-            _selectedMicDevice = deviceId;
+            _selectedMicDevice = micDeviceId;
         }
 
         public void SetEnabled(bool systemAudio, bool mic)
@@ -77,11 +77,11 @@ namespace JeetScreenRecorder.Audio
             return (0.0, 0.0);
         }
 
-        public void Start(string micDevice, bool captureSystem, bool captureMic, int sampleRate)
+        public void Start(string? micDeviceId, bool mic, bool system, int sampleRate)
         {
-            _selectedMicDevice = micDevice ?? _selectedMicDevice;
-            _captureSystem = captureSystem;
-            _captureMic = captureMic;
+            _selectedMicDevice = micDeviceId ?? _selectedMicDevice;
+            _captureMic = mic;
+            _captureSystem = system;
             SampleRate = sampleRate > 0 ? sampleRate : 48000;
 
             StartRecording();
