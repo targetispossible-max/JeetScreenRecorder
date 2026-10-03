@@ -19,9 +19,26 @@ namespace JeetScreenRecorder.Audio
             _memoryStream = new MemoryStream();
         }
 
+        public AudioPipeSink(int bufferSize)
+        {
+            _memoryStream = new MemoryStream();
+        }
+
         public AudioPipeSink(Stream destinationStream, AudioMixerEngine? mixerEngine = null)
         {
             _memoryStream = destinationStream as MemoryStream ?? new MemoryStream();
+        }
+
+        public AudioPipeSink(int port, AudioMixerEngine? mixerEngine = null)
+        {
+            _memoryStream = new MemoryStream();
+        }
+
+        public Task ConnectAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _cts.CancelAfter(timeout);
+            return ConnectAsync(_cts.Token);
         }
 
         public Task ConnectAsync(CancellationToken cancellationToken = default)
@@ -52,7 +69,6 @@ namespace JeetScreenRecorder.Audio
 
         public void Start()
         {
-            // Compatibility method
         }
 
         public void Stop()
