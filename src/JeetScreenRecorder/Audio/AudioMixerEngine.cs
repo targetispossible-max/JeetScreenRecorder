@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
@@ -10,101 +12,164 @@ namespace JeetScreenRecorder.Audio
         private WaveInEvent? _micCapture;
         private BufferedWaveProvider? _loopbackBuffer;
         private BufferedWaveProvider? _micBuffer;
-        
-        private bool _isRecording;
+        private Stream? _destinationStream;
+
+        private bool _captureSystem = true;
+        private bool _captureMic = false;
+        private string? _selectedMicDevice;
+        private double _systemGain = 1.0;
+        private double _micGain = 1.0;
+
         private readonly object _lockObject = new object();
 
-        public int SampleRate { get; } = 48000;
+        public bool IsRunning { get; private set; }
+        public event EventHandler<string>? Warning;
+
+        public int SampleRate { get; private set; } = 48000;
         public int Channels { get; } = 2;
 
         public AudioMixerEngine()
         {
-            // Default constructor for DI
         }
 
-        public void StartRecording(bool captureSystemAudio, bool captureMic, string? selectedMicDeviceId = null)
+        public IEnumerable<string> GetMicrophones()
         {
+            var mics = new List<string>();
             try
             {
-                if (captureSystemAudio)
+                for (int i = 0; i < WaveIn.DeviceCount; i++)
                 {
-                    _loopbackCapture = new WasapiLoopbackCapture();
-                    _loopbackBuffer = new BufferedWaveProvider(_loopbackCapture.WaveFormat)
-                    {
-                        DiscardOnBufferOverflow = true,
-                        BufferLength = 1024 * 1024
-                    };
-
-                    _loopbackCapture.DataAvailable += (s, e) =>
-                    {
-                        lock (_lockObject)
-                        {
-                            if (_isRecording && e.BytesRecorded > 0 && _loopbackBuffer != null)
-                            {
-                                _loopbackBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
-                            }
-                        }
-                    };
+                    var caps = WaveIn.GetCapabilities(i);
+                    mics.Add(caps.ProductName);
                 }
+            }
+            catch (Exception ex)
+            {
+                Warning?.Invoke(this, $"Error getting microphones: {ex.Message}");
+            }
+            return mics;
+        }
 
-                if (captureMic)
+        public void SetSink(Stream? stream)
+        {
+            _destinationStream = stream;
+        }
+
+        public void SetMicDevice(string? deviceId)
+        {
+            _selectedMicDevice = deviceId;
+        }
+
+        public void SetEnabled(bool systemAudio, bool mic)
+        {
+            _captureSystem = systemAudio;
+            _captureMic = mic;
+        }
+
+        public void SetGains(double systemGain, double micGain)
+        {
+            _systemGain = systemGain;
+            _micGain = micGain;
+        }
+
+        public void ReadPeaks(out float systemPeak, out float micPeak)
+        {
+            systemPeak = 0.0f;
+            micPeak = 0.0f;
+        }
+
+        public void Start(string? micDevice, bool captureSystem, bool captureMic, int sampleRate)
+        {
+            _selectedMicDevice = micDevice ?? _selectedMicDevice;
+            _captureSystem = captureSystem;
+            _captureMic = captureMic;
+            SampleRate = sampleRate > 0 ? sampleRate : 48000;
+
+            StartRecording();
+        }
+
+        public void StartRecording()
+        {
+            lock (_lockObject)
+            {
+                if (IsRunning) return;
+
+                try
                 {
-                    int deviceIndex = 0;
-                    if (!string.IsNullOrEmpty(selectedMicDeviceId))
+                    if (_captureSystem)
                     {
-                        for (int i = 0; i < WaveIn.DeviceCount; i++)
-                        {
-                            var info = WaveIn.GetCapabilities(i);
-                            if (info.ProductName.Contains(selectedMicDeviceId))
-                            {
-                                deviceIndex = i;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (WaveIn.DeviceCount > 0)
-                    {
-                        _micCapture = new WaveInEvent
-                        {
-                            DeviceNumber = deviceIndex,
-                            WaveFormat = new WaveFormat(16000, 16, 1)
-                        };
-
-                        _micBuffer = new BufferedWaveProvider(_micCapture.WaveFormat)
+                        _loopbackCapture = new WasapiLoopbackCapture();
+                        _loopbackBuffer = new BufferedWaveProvider(_loopbackCapture.WaveFormat)
                         {
                             DiscardOnBufferOverflow = true,
                             BufferLength = 1024 * 1024
                         };
 
-                        _micCapture.DataAvailable += (s, e) =>
+                        _loopbackCapture.DataAvailable += (s, e) =>
                         {
                             lock (_lockObject)
                             {
-                                if (_isRecording && e.BytesRecorded > 0 && _micBuffer != null)
+                                if (IsRunning && e.BytesRecorded > 0 && _loopbackBuffer != null)
                                 {
-                                    _micBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                                    _loopbackBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                                    _destinationStream?.Write(e.Buffer, 0, e.BytesRecorded);
                                 }
                             }
                         };
+                        _loopbackCapture.StartRecording();
                     }
+
+                    if (_captureMic)
+                    {
+                        int deviceIndex = 0;
+                        if (!string.IsNullOrEmpty(_selectedMicDevice))
+                        {
+                            for (int i = 0; i < WaveIn.DeviceCount; i++)
+                            {
+                                var info = WaveIn.GetCapabilities(i);
+                                if (info.ProductName.Contains(_selectedMicDevice))
+                                {
+                                    deviceIndex = i;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (WaveIn.DeviceCount > 0)
+                        {
+                            _micCapture = new WaveInEvent
+                            {
+                                DeviceNumber = deviceIndex,
+                                WaveFormat = new WaveFormat(16000, 16, 1)
+                            };
+
+                            _micBuffer = new BufferedWaveProvider(_micCapture.WaveFormat)
+                            {
+                                DiscardOnBufferOverflow = true,
+                                BufferLength = 1024 * 1024
+                            };
+
+                            _micCapture.DataAvailable += (s, e) =>
+                            {
+                                lock (_lockObject)
+                                {
+                                    if (IsRunning && e.BytesRecorded > 0 && _micBuffer != null)
+                                    {
+                                        _micBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                                        _destinationStream?.Write(e.Buffer, 0, e.BytesRecorded);
+                                    }
+                                }
+                            };
+                            _micCapture.StartRecording();
+                        }
+                    }
+
+                    IsRunning = true;
                 }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Audio Initialization Error: {ex.Message}");
-            }
-
-            Start();
-        }
-
-        public void Start()
-        {
-            lock (_lockObject)
-            {
-                _isRecording = true;
-                try { _loopbackCapture?.StartRecording(); } catch { }
-                try { _micCapture?.StartRecording(); } catch { }
+                catch (Exception ex)
+                {
+                    Warning?.Invoke(this, $"StartRecording Error: {ex.Message}");
+                }
             }
         }
 
@@ -112,7 +177,7 @@ namespace JeetScreenRecorder.Audio
         {
             lock (_lockObject)
             {
-                _isRecording = false;
+                IsRunning = false;
                 try { _loopbackCapture?.StopRecording(); } catch { }
                 try { _micCapture?.StopRecording(); } catch { }
             }
@@ -123,6 +188,7 @@ namespace JeetScreenRecorder.Audio
             Stop();
             _loopbackCapture?.Dispose();
             _micCapture?.Dispose();
+            _destinationStream = null;
         }
     }
 }
