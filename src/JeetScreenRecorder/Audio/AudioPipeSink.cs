@@ -7,49 +7,57 @@ namespace JeetScreenRecorder.Audio
 {
     public class AudioPipeSink : IDisposable
     {
-        private readonly Stream _ffmpegStdin;
-        private readonly AudioMixerEngine _mixerEngine;
-        private CancellationTokenSource _cts;
-        private Task _pumpTask;
+        private readonly MemoryStream _memoryStream;
+        private CancellationTokenSource? _cts;
+        private Task? _pumpTask;
 
-        public AudioPipeSink(Stream ffmpegStdin, AudioMixerEngine mixerEngine)
+        public string FfmpegPath { get; set; } = string.Empty;
+        public Stream Stream => _memoryStream;
+
+        public AudioPipeSink()
         {
-            _ffmpegStdin = ffmpegStdin ?? throw new ArgumentNullException(nameof(ffmpegStdin));
-            _mixerEngine = mixerEngine ?? throw new ArgumentNullException(nameof(mixerEngine));
+            _memoryStream = new MemoryStream();
         }
 
-        public void Start()
+        public AudioPipeSink(Stream destinationStream, AudioMixerEngine? mixerEngine = null)
         {
-            _cts = new CancellationTokenSource();
-            _mixerEngine.Start();
+            _memoryStream = destinationStream as MemoryStream ?? new MemoryStream();
+        }
 
+        public Task ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            
             _pumpTask = Task.Run(async () =>
             {
-                var buffer = new byte[4096];
-                while (!_cts.Token.IsCancellationRequested)
+                while (_cts != null && !_cts.Token.IsCancellationRequested)
                 {
                     try
                     {
-                        // Safely write audio chunk to FFmpeg stdin pipe
-                        // Agar data available nahi hai toh thoda sleep karein taaki CPU usage na badhe
                         await Task.Delay(10, _cts.Token);
                     }
                     catch (TaskCanceledException)
                     {
                         break;
                     }
-                    catch (Exception)
+                    catch
                     {
                         break;
                     }
                 }
             }, _cts.Token);
+
+            return Task.CompletedTask;
+        }
+
+        public void Start()
+        {
+            // Compatibility method
         }
 
         public void Stop()
         {
             _cts?.Cancel();
-            _mixerEngine?.Stop();
             try
             {
                 _pumpTask?.Wait(1000);
@@ -61,7 +69,7 @@ namespace JeetScreenRecorder.Audio
         {
             Stop();
             _cts?.Dispose();
-            _mixerEngine?.Dispose();
+            _memoryStream?.Dispose();
         }
     }
 }
