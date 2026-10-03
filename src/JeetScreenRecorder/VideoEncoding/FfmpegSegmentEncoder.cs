@@ -45,8 +45,10 @@ public sealed class FfmpegSegmentEncoder : IVideoEncoder
         var first = await Task.WhenAny(exited.Task, Task.Delay(1500));
         if (first == exited.Task)
         {
+            await Task.Run(() => p.WaitForExit()); // let all stderr lines arrive
             string text;
             lock (_err) text = _err.ToString().Trim();
+            AppLogger.Info($"ffmpeg full output: {text}");
             var last = text.Split('\n').LastOrDefault()?.Trim() ?? "";
             _proc = null;
             p.Dispose();

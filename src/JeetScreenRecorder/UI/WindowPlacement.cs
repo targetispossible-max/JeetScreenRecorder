@@ -13,12 +13,20 @@ public static class WindowPlacement
 
     private static readonly IntPtr HwndTopmost = new(-1);
     private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;
 
     public static void CoverMonitor(Window w, MonitorInfo m)
     {
         var h = new WindowInteropHelper(w).EnsureHandle();
         SetWindowPos(h, HwndTopmost, m.X, m.Y, m.Width, m.Height, SWP_NOACTIVATE);
+    }
+
+    /// <summary>Raises a topmost window above other topmost windows without taking focus.</summary>
+    public static void BringToFront(Window w)
+    {
+        var h = new WindowInteropHelper(w).EnsureHandle();
+        SetWindowPos(h, HwndTopmost, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
     public static void MoveTo(Window w, int x, int y)

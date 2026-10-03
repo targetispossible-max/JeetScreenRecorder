@@ -172,7 +172,10 @@ public sealed class AnnotationToolbarWindow : Window
         var rec = Btn("⏺ Rec / ⏹ Stop", "Start or stop recording (F9)", () => _svc.RequestRecordToggle());
         rec.Background = new SolidColorBrush(Color.FromRgb(0xE5, 0x48, 0x4D));
         actRow.Children.Add(rec);
-        actRow.Children.Add(Btn("✕ Hide toolbar", "Hide the toolbar (F8). Drawings stay visible.", () => _svc.HideToolbar()));
+        actRow.Children.Add(Btn("🙈 Hide toolbar", "Hide only the toolbar (F8). Drawings stay on screen.", () => _svc.HideToolbar()));
+        var exit = Btn("✖ Exit annotate (Esc)", "Remove all drawings and close the annotation tools", () => _svc.Exit());
+        exit.Background = new SolidColorBrush(Color.FromRgb(0x6B, 0x21, 0x28));
+        actRow.Children.Add(exit);
         root.Children.Add(actRow);
 
         return root;

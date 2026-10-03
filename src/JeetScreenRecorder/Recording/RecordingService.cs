@@ -164,7 +164,7 @@ public sealed class RecordingService : IRecordingService
             Task? connect = null;
             if (_useAudio)
             {
-                sink = new AudioPipeSink();
+                sink = new AudioPipeSink(_opts.AudioSampleRate);
                 opts = opts with { AudioPipePath = sink.FfmpegPath };
                 connect = sink.ConnectAsync(TimeSpan.FromSeconds(8));
             }
@@ -181,6 +181,17 @@ public sealed class RecordingService : IRecordingService
             _audio.SetSink(null);
             sink?.Dispose();
             await encoder.DisposeAsync();
+
+            if (_useAudio)
+            {
+                // The audio input is the most common reason ffmpeg cannot start: retry without audio first.
+                _useAudio = false;
+                _audio.Stop();
+                AppLogger.Warn("Retrying without audio");
+                await StartSegmentAsync();
+                Notice?.Invoke(this, "Audio could not be connected, so recording started without audio. Details are in the log folder.");
+                return;
+            }
 
             if (_opts.Backend == CaptureBackend.DesktopDuplication)
             {

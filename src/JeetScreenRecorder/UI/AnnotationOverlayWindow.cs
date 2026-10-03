@@ -51,6 +51,9 @@ public sealed class AnnotationOverlayWindow : Window
     /// <summary>Laser/spotlight only run while the toolbar is open.</summary>
     public bool EffectsEnabled { get; set; } = true;
 
+    /// <summary>Raised when the user presses Esc (and no text box is being edited).</summary>
+    public event EventHandler? ExitRequested;
+
     public AnnotationOverlayWindow(AnnotationState st)
     {
         _st = st;
@@ -72,6 +75,14 @@ public sealed class AnnotationOverlayWindow : Window
         _canvas.MouseMove += OnMove;
         _canvas.MouseLeftButtonUp += OnUp;
         _pointerTimer.Tick += (_, _) => UpdatePointerEffects();
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape && _editor == null)
+            {
+                e.Handled = true;
+                ExitRequested?.Invoke(this, EventArgs.Empty);
+            }
+        };
 
         SourceInitialized += (_, _) => ApplyInteractive();
         DpiChanged += (_, _) => { if (_mon != null) WindowPlacement.CoverMonitor(this, _mon); };

@@ -17,5 +17,7 @@ public interface IAnnotationService
     void Undo();
     void Redo();
     void ClearAll();
+    /// <summary>Removes every drawing and closes the annotation tools completely.</summary>
+    void Exit();
     void CloseAll();
 }

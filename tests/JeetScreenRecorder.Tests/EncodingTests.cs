@@ -82,18 +82,18 @@ public class EncodingTests
     [Fact]
     public void Audio_InputComesBeforeFilters_AndAacIsUsed()
     {
-        var o = Opts("libx264") with { AudioPipePath = @"\\.\pipe\x", AudioSampleRate = 48000, AudioBitrateKbps = 192 };
+        var o = Opts("libx264") with { AudioPipePath = "tcp://127.0.0.1:5000", AudioSampleRate = 48000, AudioBitrateKbps = 192 };
         var a = FfmpegArgsBuilder.Build(o, "out.mkv");
-        Assert.Contains("-f s16le -ar 48000 -ac 2", a);
+        Assert.Contains("-f wav -i \"tcp://127.0.0.1:5000\"", a);
         Assert.Contains("-c:a aac -b:a 192k", a);
-        Assert.True(a.IndexOf("-f s16le") < a.IndexOf("-vf"));
+        Assert.True(a.IndexOf("-f wav") < a.IndexOf("-vf"));
     }
 
     [Fact]
     public void NoAudioPipe_MeansNoAudioArgs()
     {
         var a = FfmpegArgsBuilder.Build(Opts("h264_nvenc"), "out.mkv");
-        Assert.DoesNotContain("s16le", a);
+        Assert.DoesNotContain("-f wav", a);
         Assert.DoesNotContain("-c:a", a);
     }
 

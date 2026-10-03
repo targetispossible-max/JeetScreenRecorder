@@ -17,10 +17,14 @@ public partial class MainWindow : Window
 
     private readonly MainViewModel _vm;
     private readonly GlobalHotkeyService _hotkeys;
+    private RecordingControlWindow? _bar;
+    private bool _wasActive;
 
     public MainWindow(MainViewModel vm, GlobalHotkeyService hotkeys)
     {
         InitializeComponent();
+        Title = $"{AppInfo.Name} - {AppInfo.Build}";
+        AppLogger.Info($"Running {AppInfo.Build}");
         _vm = vm;
         _hotkeys = hotkeys;
         DataContext = vm;
@@ -34,13 +38,38 @@ public partial class MainWindow : Window
         _vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.HideFromCapture)) ApplyCaptureAffinity();
+            else if (e.PropertyName == nameof(MainViewModel.RecordingActive)) OnRecordingActiveChanged();
         };
         Closing += OnClosing;
         Closed += (_, _) =>
         {
+            try { _bar?.Close(); } catch { }
             _vm.Shutdown();
             _hotkeys.Dispose();
         };
+    }
+
+    /// <summary>
+    /// While recording: the main window goes to the taskbar and a small control bar (timer, pause, stop, draw) shows.
+    /// When recording ends the main window comes back.
+    /// </summary>
+    private void OnRecordingActiveChanged()
+    {
+        bool active = _vm.RecordingActive;
+        if (active == _wasActive) return;
+        _wasActive = active;
+        if (active)
+        {
+            _bar ??= new RecordingControlWindow(_vm);
+            _bar.ShowOnMonitor(_vm.SelectedMonitor);
+            WindowState = WindowState.Minimized;
+        }
+        else
+        {
+            _bar?.HideBar();
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+        }
     }
 
     /// <summary>Makes this window invisible to screen capture (recording/screenshots) but visible to the user.</summary>

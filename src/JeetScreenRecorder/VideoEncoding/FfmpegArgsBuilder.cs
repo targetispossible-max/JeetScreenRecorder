@@ -60,7 +60,7 @@ public static class FfmpegArgsBuilder
         AppendVideoInput(sb, o, o.Fps, o.DrawMouse);
         bool hasAudio = !test && !string.IsNullOrEmpty(o.AudioPipePath);
         if (hasAudio)
-            sb.Append($"-thread_queue_size 1024 -f s16le -ar {o.AudioSampleRate} -ac 2 -i \"{o.AudioPipePath}\" ");
+            sb.Append($"-thread_queue_size 1024 -f wav -i \"{o.AudioPipePath}\" ");
 
         // ---- video filters ----
         // NVENC can take GPU frames directly (zero-copy) when no scaling is needed.

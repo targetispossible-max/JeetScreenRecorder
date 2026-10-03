@@ -46,6 +46,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _estimate = "";
     private string _preset = "Custom";
     private int _countdown;
+    private bool _starting;
     private int _tick;
     private double _micLevel, _sysLevel;
     private WindowInfo? _selectedWindow;
@@ -166,20 +167,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (!PrepareCaptureTarget()) return;
         PersistSettings();
-        int n = _s.CountdownSeconds;
-        if (n > 0)
+        _starting = true;                                   // main window minimizes, small control bar appears
+        OnPropertyChanged(nameof(RecordingActive));
+        try
         {
-            try
+            int n = _s.CountdownSeconds;
+            if (n > 0)
             {
-                for (int i = n; i > 0; i--)
+                try
                 {
-                    Countdown = i;
-                    await Task.Delay(1000);
+                    for (int i = n; i > 0; i--)
+                    {
+                        Countdown = i;
+                        await Task.Delay(1000);
+                    }
                 }
+                finally { Countdown = 0; }
             }
-            finally { Countdown = 0; }
+            await _rec.StartAsync();
         }
-        await _rec.StartAsync();
+        finally
+        {
+            _starting = false;
+            OnPropertyChanged(nameof(RecordingActive));
+        }
     }
 
     private async Task TakeScreenshotAsync()
@@ -219,6 +230,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(MicLevel));
         OnPropertyChanged(nameof(SystemLevel));
         OnPropertyChanged(nameof(TimerText));
+        OnPropertyChanged(nameof(BarText));
         OnPropertyChanged(nameof(StatsText));
         OnPropertyChanged(nameof(EncoderText));
         if (++_tick % 20 == 0) UpdateEstimate();
@@ -372,12 +384,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
             _countdown = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(StatusText));
+            OnPropertyChanged(nameof(BarText));
             StartCommand.Raise();
         }
     }
 
     public bool CanEditSettings => _rec.State == RecordingState.Idle && _countdown == 0;
     public string TimerText => _rec.Elapsed.ToString(@"hh\:mm\:ss");
+
+    /// <summary>True from pressing Start until the recording is stopped: the main window hides and the small control bar shows.</summary>
+    public bool RecordingActive => _starting || _rec.State is RecordingState.Recording or RecordingState.Paused;
+    public bool IsPaused => _rec.State == RecordingState.Paused;
+    /// <summary>Text for the small control bar: the countdown while waiting, then the recording time.</summary>
+    public string BarText => _countdown > 0 ? $"Starting in {_countdown}…" : TimerText;
 
     public string StatusText => _countdown > 0
         ? $"Recording starts in {_countdown}…"
@@ -660,6 +679,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         OnPropertyChanged(nameof(StatusText));
         OnPropertyChanged(nameof(TimerText));
+        OnPropertyChanged(nameof(BarText));
+        OnPropertyChanged(nameof(IsPaused));
+        OnPropertyChanged(nameof(RecordingActive));
         OnPropertyChanged(nameof(PauseLabel));
         OnPropertyChanged(nameof(TestLabel));
         OnPropertyChanged(nameof(CanEditSettings));

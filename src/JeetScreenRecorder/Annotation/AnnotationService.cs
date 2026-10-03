@@ -26,7 +26,13 @@ public sealed class AnnotationService : IAnnotationService
     {
         var mon = _monitors.Get(_settings.Current.MonitorIndex);
 
-        _overlay ??= new AnnotationOverlayWindow(State);
+        if (_overlay == null)
+        {
+            _overlay = new AnnotationOverlayWindow(State);
+            // Clicking the overlay moves it above the toolbar; put the toolbar back on top so its buttons stay clickable.
+            _overlay.Activated += (_, _) => RaiseToolbar();
+            _overlay.ExitRequested += (_, _) => Exit();
+        }
         _overlay.EffectsEnabled = true;
         _overlay.Cover(mon);
         if (!_overlay.IsVisible) _overlay.Show();
@@ -83,6 +89,19 @@ public sealed class AnnotationService : IAnnotationService
     public void Undo() => _overlay?.Undo();
     public void Redo() => _overlay?.Redo();
     public void ClearAll() => _overlay?.ClearAll();
+
+    private void RaiseToolbar()
+    {
+        if (_toolbar?.IsVisible == true) WindowPlacement.BringToFront(_toolbar);
+    }
+
+    /// <summary>Clears all drawings and closes the toolbar and overlay (the screen is back to normal).</summary>
+    public void Exit()
+    {
+        ClearAll();
+        HideToolbar();
+        CloseAll();
+    }
 
     public void CloseAll()
     {
