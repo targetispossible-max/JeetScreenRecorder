@@ -72,6 +72,11 @@ namespace JeetScreenRecorder.Audio
             _micGain = micGain;
         }
 
+        // Interface compliance ke liye dono overloads provide kiye gaye hain
+        public void ReadPeaks()
+        {
+        }
+
         public void ReadPeaks(out float systemPeak, out float micPeak)
         {
             systemPeak = 0.0f;
