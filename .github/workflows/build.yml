@@ -1,0 +1,73 @@
+name: Build JeetScreenRecorder
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore JeetScreenRecorder.sln
+
+      - name: Build
+        run: dotnet build JeetScreenRecorder.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test JeetScreenRecorder.sln -c Release --no-build --verbosity normal
+
+      - name: Publish (self-contained, single-file exe)
+        run: >
+          dotnet publish src/JeetScreenRecorder/JeetScreenRecorder.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish
+
+      - name: Bundle FFmpeg (users need no manual install)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          Invoke-WebRequest $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp
+          New-Item -ItemType Directory -Force publish/ffmpeg | Out-Null
+          $bin = Join-Path (Get-ChildItem ffmpeg-tmp -Directory | Select-Object -First 1).FullName "bin"
+          Copy-Item (Join-Path $bin "ffmpeg.exe") "publish/ffmpeg/"
+          Copy-Item (Join-Path $bin "ffprobe.exe") "publish/ffmpeg/"
+
+      - name: Zip portable build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path publish/* -DestinationPath dist/JeetScreenRecorder-win-x64.zip
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $v = "0.1.0"
+          if ($env:GITHUB_REF -like 'refs/tags/v*') { $v = $env:GITHUB_REF_NAME.TrimStart('v') }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" installer\JeetScreenRecorder.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JeetScreenRecorder-windows
+          path: dist/*
+
+      - name: Publish GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
