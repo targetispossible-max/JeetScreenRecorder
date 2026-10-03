@@ -1,34 +1,31 @@
 using System;
-using System.IO;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
 
 namespace JeetScreenRecorder.Audio
 {
-    public class AudioMixerEngine : IDisposable
+    public class AudioMixerEngine : IAudioCaptureService, IDisposable
     {
-        private WasapiLoopbackCapture _loopbackCapture;
-        private WaveInEvent _micCapture;
-        private BufferedWaveProvider _loopbackBuffer;
-        private BufferedWaveProvider _micBuffer;
+        private WasapiLoopbackCapture? _loopbackCapture;
+        private WaveInEvent? _micCapture;
+        private BufferedWaveProvider? _loopbackBuffer;
+        private BufferedWaveProvider? _micBuffer;
         
-        private readonly Stream _destinationStream;
         private bool _isRecording;
         private readonly object _lockObject = new object();
 
         public int SampleRate { get; } = 48000;
         public int Channels { get; } = 2;
 
-        public AudioMixerEngine(Stream destinationStream, bool captureSystemAudio, bool captureMic, string selectedMicDeviceId = null)
+        public AudioMixerEngine()
         {
-            _destinationStream = destinationStream ?? throw new ArgumentNullException(nameof(destinationStream));
+            // Default constructor for DI
+        }
 
-            WaveFormat targetFormat = new WaveFormat(SampleRate, 16, Channels);
-
+        public void StartRecording(bool captureSystemAudio, bool captureMic, string? selectedMicDeviceId = null)
+        {
             try
             {
-                // 1. System Audio Setup (WASAPI Loopback)
                 if (captureSystemAudio)
                 {
                     _loopbackCapture = new WasapiLoopbackCapture();
@@ -42,7 +39,7 @@ namespace JeetScreenRecorder.Audio
                     {
                         lock (_lockObject)
                         {
-                            if (_isRecording && e.BytesRecorded > 0)
+                            if (_isRecording && e.BytesRecorded > 0 && _loopbackBuffer != null)
                             {
                                 _loopbackBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
                             }
@@ -50,7 +47,6 @@ namespace JeetScreenRecorder.Audio
                     };
                 }
 
-                // 2. Microphone Setup
                 if (captureMic)
                 {
                     int deviceIndex = 0;
@@ -72,7 +68,7 @@ namespace JeetScreenRecorder.Audio
                         _micCapture = new WaveInEvent
                         {
                             DeviceNumber = deviceIndex,
-                            WaveFormat = new WaveFormat(16000, 16, 1) // Standard mic format
+                            WaveFormat = new WaveFormat(16000, 16, 1)
                         };
 
                         _micBuffer = new BufferedWaveProvider(_micCapture.WaveFormat)
@@ -85,7 +81,7 @@ namespace JeetScreenRecorder.Audio
                         {
                             lock (_lockObject)
                             {
-                                if (_isRecording && e.BytesRecorded > 0)
+                                if (_isRecording && e.BytesRecorded > 0 && _micBuffer != null)
                                 {
                                     _micBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
                                 }
@@ -98,6 +94,8 @@ namespace JeetScreenRecorder.Audio
             {
                 System.Diagnostics.Debug.WriteLine($"Audio Initialization Error: {ex.Message}");
             }
+
+            Start();
         }
 
         public void Start()
@@ -118,13 +116,6 @@ namespace JeetScreenRecorder.Audio
                 try { _loopbackCapture?.StopRecording(); } catch { }
                 try { _micCapture?.StopRecording(); } catch { }
             }
-        }
-
-        public void WriteMixedAudio(byte[] outputBuffer, int offset, int count)
-        {
-            // Yeh method AudioPipeSink dwara call kiya jayega jo mixed PCM data ko FFmpeg pipe me dalega
-            // Yahan hum buffers se data read karke mix karte hain.
-            // Implementation details AudioPipeSink me handle ki gayi hain.
         }
 
         public void Dispose()
