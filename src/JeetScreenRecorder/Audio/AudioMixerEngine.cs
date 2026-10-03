@@ -32,15 +32,15 @@ namespace JeetScreenRecorder.Audio
         {
         }
 
-        public IEnumerable<string> GetMicrophones()
+        public IReadOnlyList<AudioDeviceInfo> GetMicrophones()
         {
-            var mics = new List<string>();
+            var mics = new List<AudioDeviceInfo>();
             try
             {
                 for (int i = 0; i < WaveIn.DeviceCount; i++)
                 {
                     var caps = WaveIn.GetCapabilities(i);
-                    mics.Add(caps.ProductName);
+                    mics.Add(new AudioDeviceInfo(caps.ProductName, i.ToString()));
                 }
             }
             catch (Exception ex)
