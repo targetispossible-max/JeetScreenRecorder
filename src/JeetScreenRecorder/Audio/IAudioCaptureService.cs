@@ -15,6 +15,8 @@ public interface IAudioCaptureService : IDisposable
     void SetMicDevice(string? micDeviceId);
     /// <summary>Receives mixed PCM (s16le, stereo). Pass null to stop writing.</summary>
     void SetSink(Stream? sink);
+    /// <summary>Loudest sample (0..1) of the mixed signal written to the sink since the sink was attached. Used to detect silent recordings.</summary>
+    double SinkPeak { get; }
     /// <summary>Peak levels (0..1) since the last call.</summary>
     (double Mic, double System) ReadPeaks();
 }

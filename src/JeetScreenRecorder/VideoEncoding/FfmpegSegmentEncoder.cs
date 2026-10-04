@@ -13,6 +13,7 @@ public sealed class FfmpegSegmentEncoder : IVideoEncoder
     private readonly StringBuilder _err = new();
     private double _fps;
     private long _size, _drop, _frames;
+    private double _outTime;
 
     public event EventHandler<EncoderStats>? StatsUpdated;
 
@@ -69,7 +70,8 @@ public sealed class FfmpegSegmentEncoder : IVideoEncoder
             case "total_size": long.TryParse(val, out _size); break;
             case "drop_frames": long.TryParse(val, out _drop); break;
             case "frame": long.TryParse(val, out _frames); break;
-            case "progress": StatsUpdated?.Invoke(this, new EncoderStats(_fps, _size, _drop, _frames)); break;
+            case "out_time_us": if (long.TryParse(val, out var us) && us > 0) _outTime = us / 1_000_000.0; break;
+            case "progress": StatsUpdated?.Invoke(this, new EncoderStats(_fps, _size, _drop, _frames, _outTime)); break;
         }
     }
 

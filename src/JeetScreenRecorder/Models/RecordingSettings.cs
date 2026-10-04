@@ -43,6 +43,7 @@ public sealed class RecordingSettings
     public int AudioSampleRate { get; set; } = 48000;
     public int AudioChannels { get; set; } = 2;
     public int AudioBitrateKbps { get; set; } = 192;
+    public int AudioSyncOffsetMs { get; set; } = 0;   // fine-tune: + makes audio later, - earlier (milliseconds)
 
     // General
     public bool SimpleMode { get; set; } = true;

@@ -20,7 +20,6 @@ public sealed record EncoderOptions
     public int OutputHeight { get; init; }      // 0 = original
     public int BitrateKbps { get; init; } = 12000;
     public bool DrawMouse { get; init; } = true;
-    public string? AudioPipePath { get; init; } // null = no audio
     public int AudioSampleRate { get; init; } = 48000;
     public int AudioBitrateKbps { get; init; } = 192;
 }

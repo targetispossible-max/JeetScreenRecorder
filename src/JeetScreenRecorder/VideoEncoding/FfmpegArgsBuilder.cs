@@ -53,14 +53,11 @@ public static class FfmpegArgsBuilder
     public static string Build(EncoderOptions o, string? outputPath, bool test = false)
     {
         var sb = new StringBuilder("-hide_banner -y -loglevel error ");
-        if (!test) sb.Append("-progress pipe:1 -nostats ");
+        if (!test) sb.Append("-progress pipe:1 -nostats -stats_period 0.1 ");
         bool gpuFrames = o.Backend == CaptureBackend.DesktopDuplication && o.WindowHandle == 0;
 
         // ---- inputs (all inputs must come before any output option) ----
         AppendVideoInput(sb, o, o.Fps, o.DrawMouse);
-        bool hasAudio = !test && !string.IsNullOrEmpty(o.AudioPipePath);
-        if (hasAudio)
-            sb.Append($"-thread_queue_size 1024 -f wav -i \"{o.AudioPipePath}\" ");
 
         // ---- video filters ----
         // NVENC can take GPU frames directly (zero-copy) when no scaling is needed.
@@ -69,10 +66,35 @@ public static class FfmpegArgsBuilder
 
         AppendEncoder(sb, o);
         sb.Append($"-g {o.Fps * 2} ");
-        if (hasAudio) sb.Append($"-c:a aac -b:a {o.AudioBitrateKbps}k -ar {o.AudioSampleRate} ");
 
         if (test) sb.Append("-frames:v 5 -f null -");
         else sb.Append($"\"{outputPath}\"");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Joins one video-only segment with its raw PCM audio (s16le stereo) into one A/V segment. The video is copied (no re-encode).
+    /// <paramref name="audioDelaySeconds"/> pads silence at the start so audio and video line up; <c>apad</c> + <c>-shortest</c>
+    /// make the audio exactly as long as the video. Pass pcmPath = null to add a silent track instead
+    /// (so every segment has the same streams and can be joined later).
+    /// </summary>
+    public static string BuildMux(string videoPath, string? pcmPath, double audioDelaySeconds,
+        int sampleRate, int audioKbps, string outputPath)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var sb = new StringBuilder("-hide_banner -y -loglevel error ");
+        sb.Append($"-i \"{videoPath}\" ");
+        if (pcmPath != null)
+        {
+            sb.Append($"-f s16le -ar {sampleRate} -ac 2 -i \"{pcmPath}\" ");
+            int ms = (int)Math.Round(Math.Max(0, audioDelaySeconds) * 1000.0);
+            sb.Append(ms > 0 ? $"-af \"adelay={ms.ToString(inv)}|{ms.ToString(inv)},apad\" " : "-af apad ");
+        }
+        else
+        {
+            sb.Append($"-f lavfi -i \"anullsrc=r={sampleRate}:cl=stereo\" ");
+        }
+        sb.Append($"-map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a {audioKbps}k -shortest \"{outputPath}\"");
         return sb.ToString();
     }
 

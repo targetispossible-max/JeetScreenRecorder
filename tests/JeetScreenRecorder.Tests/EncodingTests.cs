@@ -80,21 +80,73 @@ public class EncodingTests
     }
 
     [Fact]
-    public void Audio_InputComesBeforeFilters_AndAacIsUsed()
+    public void VideoProcess_NeverContainsAudioInput()
     {
-        var o = Opts("libx264") with { AudioPipePath = "tcp://127.0.0.1:5000", AudioSampleRate = 48000, AudioBitrateKbps = 192 };
-        var a = FfmpegArgsBuilder.Build(o, "out.mkv");
-        Assert.Contains("-f wav -i \"tcp://127.0.0.1:5000\"", a);
-        Assert.Contains("-c:a aac -b:a 192k", a);
-        Assert.True(a.IndexOf("-f wav") < a.IndexOf("-vf"));
+        var a = FfmpegArgsBuilder.Build(Opts("libx264"), "out.mkv");
+        Assert.DoesNotContain("-f wav", a);
+        Assert.DoesNotContain("tcp://", a);
+        Assert.DoesNotContain("-c:a", a);
+        Assert.Contains("-stats_period 0.1", a);
     }
 
     [Fact]
-    public void NoAudioPipe_MeansNoAudioArgs()
+    public void Mux_WithAudio_CopiesVideo_PadsStartAndEnd()
     {
-        var a = FfmpegArgsBuilder.Build(Opts("h264_nvenc"), "out.mkv");
-        Assert.DoesNotContain("-f wav", a);
-        Assert.DoesNotContain("-c:a", a);
+        var a = FfmpegArgsBuilder.BuildMux("v.mkv", "a.pcm", 0.4, 48000, 192, "o.mkv");
+        Assert.Contains("-f s16le -ar 48000 -ac 2 -i \"a.pcm\"", a);
+        Assert.Contains("adelay=400|400,apad", a);
+        Assert.Contains("-c:v copy -c:a aac -b:a 192k -shortest", a);
+        Assert.True(a.IndexOf("-i \"v.mkv\"") < a.IndexOf("-f s16le"));
+        Assert.EndsWith("\"o.mkv\"", a);
+    }
+
+    [Fact]
+    public void Mux_WithoutDelay_OnlyPadsEnd()
+    {
+        var a = FfmpegArgsBuilder.BuildMux("v.mkv", "a.pcm", 0, 44100, 128, "o.mkv");
+        Assert.DoesNotContain("adelay", a);
+        Assert.Contains("-af apad", a);
+        Assert.Contains("-ar 44100", a);
+    }
+
+    [Fact]
+    public void Mux_WithoutPcm_AddsSilentTrack()
+    {
+        var a = FfmpegArgsBuilder.BuildMux("v.mkv", null, 0, 48000, 192, "o.mkv");
+        Assert.Contains("anullsrc=r=48000:cl=stereo", a);
+        Assert.DoesNotContain("s16le", a);
+    }
+
+    [Fact]
+    public void SegmentList_IsOrdered_AndJoinedFilesWin()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "jsr_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            foreach (var n in new[] { "part002.mkv", "av001.mkv", "part001.mkv", "av002.mkv", "part003.mkv", "list.txt", "part003.pcm" })
+                File.WriteAllBytes(Path.Combine(dir, n), new byte[] { 1 });
+            var list = SegmentMuxer.ListSegments(dir);
+            Assert.Equal(new[] { 1, 2, 3 }, list.Select(x => x.N).ToArray());
+            Assert.Equal(new[] { true, true, false }, list.Select(x => x.Joined).ToArray());
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Fact]
+    public void SegmentInfo_RoundTrips()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "jsr_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            SegmentMuxer.WriteInfo(dir, 2, 0.456, 44100);
+            var (d, r) = SegmentMuxer.ReadInfo(dir, 2);
+            Assert.Equal(0.456, d, 3);
+            Assert.Equal(44100, r);
+            Assert.Equal((0.0, 48000), SegmentMuxer.ReadInfo(dir, 9));
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
     [Fact]
