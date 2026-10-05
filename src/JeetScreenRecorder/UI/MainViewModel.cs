@@ -322,7 +322,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(StatsText));
         OnPropertyChanged(nameof(EncoderText));
         OnPropertyChanged(nameof(LicenseStatusLabel));
-        OnPropertyChanged(nameof(LicenseBadgeColor));
+        OnPropertyChanged(nameof(LicenseBadgeBrush));
         if (++_tick % 20 == 0) UpdateEstimate();
     }
 
@@ -877,7 +877,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(StatsText));
         OnPropertyChanged(nameof(EncoderText));
         OnPropertyChanged(nameof(LicenseStatusLabel));
-        OnPropertyChanged(nameof(LicenseBadgeColor));
+        OnPropertyChanged(nameof(LicenseBadgeBrush));
         StartCommand.Raise();
         PauseResumeCommand.Raise();
         StopCommand.Raise();
