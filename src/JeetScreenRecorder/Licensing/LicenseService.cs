@@ -1,4 +1,5 @@
 using System.Text.Json;
+using JeetScreenRecorder.Utils;
 
 namespace JeetScreenRecorder.Licensing;
 
