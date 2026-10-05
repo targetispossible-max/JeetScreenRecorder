@@ -75,7 +75,7 @@ public sealed class AudioMixerEngine : IAudioCaptureService
 
     public void SetGains(double micGain, double systemGain)
     {
-        _micGain = Math.Clamp(micGain, 0, 2);
+        _micGain = Math.Clamp(micGain, 0, 4);      // up to 400% (boost for quiet external microphones)
         _sysGain = Math.Clamp(systemGain, 0, 2);
     }
 
@@ -238,7 +238,13 @@ public sealed class AudioMixerEngine : IAudioCaptureService
                 float a = Math.Abs(m); if (a > mPeak) mPeak = a;
                 a = Math.Abs(s); if (a > sPeak) sPeak = a;
                 float v = m + s;
-                if (v > 1f) v = 1f; else if (v < -1f) v = -1f;
+                // Soft limiter: loud peaks are rounded off smoothly instead of being cut hard (hard cut = crackling when boosted).
+                float av = Math.Abs(v);
+                if (av > 0.8f)
+                {
+                    float lim = 0.8f + 0.2f * MathF.Tanh((av - 0.8f) / 0.2f);
+                    v = v < 0 ? -lim : lim;
+                }
                 a = Math.Abs(v); if (a > xPeak) xPeak = a;
                 short sv = (short)(v * 32767f);
                 pcm[i * 2] = (byte)(sv & 0xFF);

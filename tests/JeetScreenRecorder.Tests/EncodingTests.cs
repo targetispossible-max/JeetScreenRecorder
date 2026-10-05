@@ -50,12 +50,138 @@ public class EncodingTests
     }
 
     [Fact]
-    public void TestMode_WritesToNullMuxer()
+    public void TestMode_UsesMadeUpPicture_AndNullMuxer()
     {
         var a = FfmpegArgsBuilder.Build(Opts("h264_nvenc"), null, test: true);
-        Assert.Contains("-frames:v 5", a);
+        Assert.Contains("testsrc2", a);
+        Assert.DoesNotContain("ddagrab", a);     // encoder test must not depend on screen capture
+        Assert.DoesNotContain("dshow", a);
+        Assert.Contains("-frames:v 10", a);
         Assert.EndsWith("-f null -", a);
         Assert.DoesNotContain("-progress", a);
+    }
+
+    [Fact]
+    public void BasicEncoderArgs_RemoveOptionalNvencSwitches()
+    {
+        var best = FfmpegArgsBuilder.Build(Opts("h264_nvenc"), "o.mkv");
+        var basic = FfmpegArgsBuilder.Build(Opts("h264_nvenc") with { BasicEncoderArgs = true }, "o.mkv");
+        Assert.Contains("-tune hq", best);
+        Assert.DoesNotContain("-tune hq", basic);
+        Assert.Contains("-c:v h264_nvenc", basic);
+    }
+
+    [Fact]
+    public void ForceCpuFrames_DisablesZeroCopy()
+    {
+        var a = FfmpegArgsBuilder.Build(Opts("h264_nvenc") with { ForceCpuFrames = true }, "o.mkv");
+        Assert.Contains("hwdownload", a);
+        Assert.Contains("format=nv12", a);
+    }
+
+    [Fact]
+    public void Colours_AreTaggedAsBt709()
+    {
+        var a = FfmpegArgsBuilder.Build(Opts("libx264"), "o.mkv");
+        Assert.Contains("-colorspace bt709", a);
+        Assert.Contains("out_color_matrix=bt709", a);
+    }
+
+    [Fact]
+    public void X264_UsesChosenPreset()
+    {
+        var a = FfmpegArgsBuilder.Build(Opts("libx264") with { X264Preset = "superfast" }, "o.mkv");
+        Assert.Contains("-preset superfast", a);
+    }
+
+    [Fact]
+    public void Webcam_AddsDshowInput_AndOverlay()
+    {
+        var o = Opts("h264_nvenc") with { WebcamName = "Integrated Camera", WebcamCorner = WebcamCorner.BottomRight, WebcamPercent = 22 };
+        var a = FfmpegArgsBuilder.Build(o, "o.mkv");
+        Assert.Contains("-f dshow", a);
+        Assert.Contains("-video_size 1280x720 -framerate 30", a);
+        Assert.Contains("-i \"video=Integrated Camera\"", a);
+        Assert.Contains("-filter_complex", a);
+        Assert.Contains("overlay=x=W-w-24:y=H-h-24", a);
+        Assert.Contains("-map \"[v]\"", a);
+        Assert.Contains("hflip", a);
+        Assert.Contains("hwdownload", a);       // webcam always uses the CPU frame path
+        // both inputs come before the encoder options
+        Assert.True(a.IndexOf("-i \"video=") < a.IndexOf("-c:v"));
+        Assert.True(a.IndexOf("ddagrab") < a.IndexOf("-f dshow"));
+    }
+
+    [Fact]
+    public void Webcam_AutoFormat_DoesNotForceSize()
+    {
+        var o = Opts("libx264") with { WebcamName = "Cam", WebcamAutoFormat = true };
+        var a = FfmpegArgsBuilder.Build(o, "o.mkv");
+        Assert.DoesNotContain("-video_size 1280x720", a);
+        Assert.Contains("-i \"video=Cam\"", a);
+    }
+
+    [Theory]
+    [InlineData(WebcamCorner.BottomLeft, "x=24:y=H-h-24")]
+    [InlineData(WebcamCorner.TopRight, "x=W-w-24:y=24")]
+    [InlineData(WebcamCorner.TopLeft, "x=24:y=24")]
+    public void Webcam_CornerPositions(WebcamCorner corner, string expected)
+    {
+        var o = Opts("libx264") with { WebcamName = "Cam", WebcamCorner = corner };
+        Assert.Contains("overlay=" + expected, FfmpegArgsBuilder.Build(o, "o.mkv"));
+    }
+
+    [Fact]
+    public void Webcam_Mirror_Off_HasNoHflip()
+    {
+        var o = Opts("libx264") with { WebcamName = "Cam", WebcamMirror = false };
+        Assert.DoesNotContain("hflip", FfmpegArgsBuilder.Build(o, "o.mkv"));
+    }
+
+    [Fact]
+    public void NoWebcam_NoDshow()
+    {
+        Assert.DoesNotContain("dshow", FfmpegArgsBuilder.Build(Opts("libx264"), "o.mkv"));
+    }
+
+    [Fact]
+    public void WebcamWidth_IsEven_AndAtMostHalf()
+    {
+        Assert.Equal(422, FfmpegArgsBuilder.WebcamWidthFor(1920, 22));
+        Assert.Equal(0, FfmpegArgsBuilder.WebcamWidthFor(1921, 22) % 2);
+        Assert.True(FfmpegArgsBuilder.WebcamWidthFor(400, 50) <= 200);
+    }
+
+    [Fact]
+    public void CameraSnapshot_Args()
+    {
+        var a = FfmpegArgsBuilder.BuildCameraSnapshot("My Cam", "c.jpg", autoFormat: false);
+        Assert.Contains("-f dshow", a);
+        Assert.Contains("-i \"video=My Cam\"", a);
+        Assert.Contains("-frames:v 1", a);
+        Assert.DoesNotContain("-video_size", FfmpegArgsBuilder.BuildCameraSnapshot("My Cam", "c.jpg", autoFormat: true));
+    }
+
+    [Fact]
+    public void ParseDevices_FindsVideoCameras_Only()
+    {
+        const string text = """
+            [dshow @ 000001] DirectShow video devices (some may be both video and audio devices)
+            [dshow @ 000001]  "Integrated Camera" (video)
+            [dshow @ 000001]   Alternative name "@device_pnp_\\?\usb#vid_0c45"
+            [dshow @ 000001]  "OBS Virtual Camera" (video)
+            [dshow @ 000001] DirectShow audio devices
+            [dshow @ 000001]  "Microphone (Realtek)" (audio)
+            [dshow @ 000001]  "Integrated Camera" (video)
+            """;
+        var cams = Webcam.WebcamService.ParseDevices(text);
+        Assert.Equal(new[] { "Integrated Camera", "OBS Virtual Camera" }, cams.Select(c => c.Name).ToArray());
+    }
+
+    [Fact]
+    public void ParseDevices_NoCamera_ReturnsEmpty()
+    {
+        Assert.Empty(Webcam.WebcamService.ParseDevices("[dshow @ 1] Could not enumerate video devices"));
     }
 
     [Fact]

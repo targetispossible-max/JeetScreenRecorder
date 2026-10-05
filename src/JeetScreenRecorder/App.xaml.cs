@@ -10,6 +10,8 @@ using JeetScreenRecorder.Storage;
 using JeetScreenRecorder.UI;
 using JeetScreenRecorder.VideoEncoding;
 using JeetScreenRecorder.Utils;
+using JeetScreenRecorder.Webcam;
+using JeetScreenRecorder.Licensing;
 
 namespace JeetScreenRecorder;
 
@@ -38,6 +40,7 @@ public partial class App : Application
         sc.AddSingleton<AnnotationService>();
         sc.AddSingleton<IAnnotationService>(p => p.GetRequiredService<AnnotationService>());
         sc.AddSingleton<IScreenshotService, ScreenshotService>();
+        sc.AddSingleton<IWebcamService, WebcamService>();
         sc.AddSingleton<IAudioCaptureService, AudioMixerEngine>();
         sc.AddSingleton<GlobalHotkeyService>();
         sc.AddSingleton<IHotkeyService>(p => p.GetRequiredService<GlobalHotkeyService>());
@@ -45,11 +48,17 @@ public partial class App : Application
         sc.AddTransient<IVideoEncoder, FfmpegSegmentEncoder>();
         sc.AddSingleton<Func<IVideoEncoder>>(p => () => p.GetRequiredService<IVideoEncoder>());
         sc.AddSingleton<IRecordingService, RecordingService>();
+        sc.AddSingleton<LicenseService>();
         sc.AddSingleton<MainViewModel>();
         sc.AddTransient<MainWindow>();
         Services = sc.BuildServiceProvider();
 
         AppLogger.Info("Application started");
+
+        // Start license check in background; MainViewModel will await it before allowing recording
+        var lic = Services.GetRequiredService<LicenseService>();
+        _ = lic.InitialiseAsync();
+
         Services.GetRequiredService<MainWindow>().Show();
     }
 }

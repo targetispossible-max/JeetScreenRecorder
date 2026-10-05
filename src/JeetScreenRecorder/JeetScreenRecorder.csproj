@@ -8,8 +8,16 @@
     <AssemblyName>JeetScreenRecorder</AssemblyName>
     <RootNamespace>JeetScreenRecorder</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
+    <ApplicationIcon>Assets\JeetScreenRecorder.ico</ApplicationIcon>
+    <Company>Amarjeet K Gupta</Company>
+    <Product>Jeet Screen Recorder</Product>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\JeetScreenRecorder.ico" />
+    <Resource Include="Assets\logo.png" />
+    <Resource Include="Assets\logo256.png" />
+  </ItemGroup>
   <ItemGroup>
     <Using Include="System.IO" />
     <Using Include="System.Threading" />
@@ -17,5 +25,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 </Project>

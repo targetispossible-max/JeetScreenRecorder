@@ -53,7 +53,7 @@ public sealed class FfmpegSegmentEncoder : IVideoEncoder
             var last = text.Split('\n').LastOrDefault()?.Trim() ?? "";
             _proc = null;
             p.Dispose();
-            throw new EncoderStartException($"The video encoder could not start. {last}");
+            throw new EncoderStartException($"The video encoder could not start. {last}", text);
         }
     }
 

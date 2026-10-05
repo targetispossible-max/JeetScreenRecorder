@@ -11,6 +11,11 @@ public static class WindowPlacement
     [DllImport("user32.dll")]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
+    [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT p);
+
     private static readonly IntPtr HwndTopmost = new(-1);
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
@@ -27,6 +32,27 @@ public static class WindowPlacement
     {
         var h = new WindowInteropHelper(w).EnsureHandle();
         SetWindowPos(h, HwndTopmost, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
+    /// <summary>Position and size of the window in physical screen pixels.</summary>
+    public static (int X, int Y, int W, int H) GetBounds(Window w)
+    {
+        var h = new WindowInteropHelper(w).EnsureHandle();
+        GetWindowRect(h, out var r);
+        return (r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
+    }
+
+    public static void SetBounds(Window w, int x, int y, int width, int height)
+    {
+        var h = new WindowInteropHelper(w).EnsureHandle();
+        SetWindowPos(h, HwndTopmost, x, y, width, height, SWP_NOACTIVATE);
+    }
+
+    /// <summary>Mouse position in physical screen pixels.</summary>
+    public static (int X, int Y) CursorPosition()
+    {
+        GetCursorPos(out var p);
+        return (p.X, p.Y);
     }
 
     public static void MoveTo(Window w, int x, int y)

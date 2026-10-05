@@ -3,6 +3,8 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using JeetScreenRecorder.Annotation;
 using JeetScreenRecorder.Audio;
@@ -14,20 +16,24 @@ using JeetScreenRecorder.Settings;
 using JeetScreenRecorder.Storage;
 using JeetScreenRecorder.Utils;
 using JeetScreenRecorder.VideoEncoding;
+using JeetScreenRecorder.Webcam;
+using JeetScreenRecorder.Licensing;
 
 namespace JeetScreenRecorder.UI;
 
 public sealed class MainViewModel : INotifyPropertyChanged
 {
-    private sealed record Preset(string Name, int W, int H, int Fps, QualityPreset Q, bool? Mic = null, bool? Sys = null);
+    private sealed record Preset(string Name, int W, int H, int Fps, QualityPreset Q, bool? Mic = null, bool? Sys = null, bool? Cam = null);
 
     private static readonly Preset[] Presets =
     {
         new("YouTube 1080p 60 FPS", 1920, 1080, 60, QualityPreset.High),
         new("YouTube 720p 60 FPS", 1280, 720, 60, QualityPreset.High),
         new("YouTube 1440p 60 FPS", 2560, 1440, 60, QualityPreset.High),
-        new("YouTube 4K 60 FPS", 3840, 2160, 60, QualityPreset.VeryHigh),
+        new("YouTube 4K 60 FPS", 3840, 2160, 60, QualityPreset.High),
+        new("Best HD Quality (original size)", 0, 0, 60, QualityPreset.VeryHigh),
         new("Tutorial Recording", 1920, 1080, 60, QualityPreset.High, true, true),
+        new("Tutorial with Webcam", 1920, 1080, 60, QualityPreset.High, true, true, true),
         new("Gaming Recording", 0, 0, 60, QualityPreset.Medium),
         new("Low-End PC", 1280, 720, 30, QualityPreset.Low)
     };
@@ -40,6 +46,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly IRegionSelector _regions;
     private readonly IWindowService _windows;
     private readonly IStorageService _storage;
+    private readonly IWebcamService _webcam;
+    private readonly LicenseService _license;
     private readonly RecordingSettings _s;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(100) };
     private string _message = "";
@@ -50,6 +58,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private int _tick;
     private double _micLevel, _sysLevel;
     private WindowInfo? _selectedWindow;
+    private ImageSource? _cameraPreview;
+    private string _cameraStatus = "";
 
     public RelayCommand StartCommand { get; }
     public RelayCommand PauseResumeCommand { get; }
@@ -61,11 +71,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand OpenFolderCommand { get; }
     public RelayCommand ChooseFolderCommand { get; }
     public RelayCommand TestAudioCommand { get; }
+    public RelayCommand DetectCamerasCommand { get; }
+    public RelayCommand TestCameraCommand { get; }
+    public RelayCommand LicenseCommand { get; }
 
     public int[] FpsOptions { get; } = { 24, 30, 48, 50, 60 };
     public string[] ResolutionOptions { get; } =
         { "Original", "3840×2160", "2560×1440", "1920×1080", "1600×900", "1280×720", "854×480" };
-    public string[] QualityOptions { get; } = { "Low", "Medium", "High", "Very High", "Lossless" };
+    public string[] QualityOptions { get; } =
+        { "Low (small file)", "Medium", "High (HD)", "Very High (Full HD+)", "Ultra (maximum quality)" };
     public string[] CaptureMethodOptions { get; } = { "Auto (GPU – fastest)", "Compatible (any screen)" };
     public string[] CountdownOptions { get; } = { "Off", "3 seconds", "5 seconds", "10 seconds" };
     public string[] CaptureAreaOptions { get; } = { "Full screen", "Custom region", "Application window" };
@@ -73,10 +87,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public IReadOnlyList<MonitorInfo> MonitorOptions { get; }
     public IReadOnlyList<AudioDeviceInfo> MicOptions { get; }
     public ObservableCollection<WindowInfo> WindowOptions { get; } = new();
+    public ObservableCollection<CameraInfo> CameraOptions { get; } = new();
+    public string[] WebcamPositionOptions { get; } = { "Bottom right", "Bottom left", "Top right", "Top left" };
+    public string[] WebcamSizeOptions { get; } = { "Small", "Medium", "Large" };
 
     public MainViewModel(IRecordingService rec, ISettingsService settings, IAudioCaptureService audio,
         IScreenshotService shot, IMonitorService monitors, IAnnotationService annotation,
-        IRegionSelector regions, IWindowService windows, IStorageService storage)
+        IRegionSelector regions, IWindowService windows, IStorageService storage, IWebcamService webcam,
+        LicenseService license)
     {
         _rec = rec;
         _settings = settings;
@@ -86,13 +104,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _regions = regions;
         _windows = windows;
         _storage = storage;
+        _webcam = webcam;
+        _license = license;
         _s = settings.Current;
         MonitorOptions = monitors.GetMonitors();
         MicOptions = audio.GetMicrophones();
         _audio.SetGains(_s.MicVolume, _s.SystemVolume);
 
         StartCommand = new RelayCommand(() => Run(StartWithCountdownAsync),
-            () => _rec.State == RecordingState.Idle && _countdown == 0);
+            () => _rec.State == RecordingState.Idle && _countdown == 0 && _license.CanRecord);
         PauseResumeCommand = new RelayCommand(
             () => Run(() => _rec.State == RecordingState.Paused ? _rec.ResumeAsync() : _rec.PauseAsync()),
             () => _rec.State is RecordingState.Recording or RecordingState.Paused);
@@ -105,6 +125,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OpenFolderCommand = new RelayCommand(OpenFolder);
         ChooseFolderCommand = new RelayCommand(ChooseFolder, () => _rec.State == RecordingState.Idle);
         TestAudioCommand = new RelayCommand(ToggleTestAudio, () => _rec.State == RecordingState.Idle);
+        DetectCamerasCommand = new RelayCommand(() => Run(DetectCamerasAsync), () => _rec.State == RecordingState.Idle);
+        TestCameraCommand = new RelayCommand(() => Run(TestCameraAsync), () => _rec.State == RecordingState.Idle);
+        LicenseCommand = new RelayCommand(OpenLicenseWindow);
 
         _rec.StateChanged += (_, _) => Refresh();
         _rec.Notice += (_, msg) => Application.Current.Dispatcher.Invoke(() => Message = msg);
@@ -115,6 +138,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (_s.Source == CaptureSource.Window) RefreshWindows();
         UpdateEstimate();
         Run(_rec.InitializeAsync);
+        Run(DetectCamerasAsync);
         Application.Current.Dispatcher.BeginInvoke(new Action(() => Run(CheckRecoveryAsync)), DispatcherPriority.ApplicationIdle);
     }
 
@@ -133,6 +157,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool PrepareCaptureTarget()
     {
         var mon = SelectedMonitor;
+        if (_s.WebcamEnabled && string.IsNullOrWhiteSpace(_s.WebcamName))
+        {
+            Message = "The webcam is turned on but no camera was found. Connect a camera and press “Detect”, or turn the webcam off.";
+            return false;
+        }
         if (_s.Source == CaptureSource.CustomRegion)
         {
             if (mon == null || !CaptureOptionsFactory.IsValidRegion(_s, mon))
@@ -193,6 +222,65 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    // ---------------- webcam ----------------
+    private async Task DetectCamerasAsync()
+    {
+        CameraStatus = "Looking for cameras…";
+        var cams = await _webcam.DetectAsync();
+        CameraOptions.Clear();
+        foreach (var c in cams) CameraOptions.Add(c);
+        if (cams.Count == 0)
+        {
+            CameraStatus = "No camera found. Connect a webcam and press “Detect”.";
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(_s.WebcamName) || !cams.Any(c => c.Name == _s.WebcamName))
+            {
+                _s.WebcamName = cams[0].Name;
+                PersistSettings();
+            }
+            CameraStatus = cams.Count == 1 ? "1 camera found." : $"{cams.Count} cameras found.";
+        }
+        OnPropertyChanged(nameof(SelectedCameraName));
+    }
+
+    private async Task TestCameraAsync()
+    {
+        var name = _s.WebcamName;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            CameraStatus = "No camera selected. Press “Detect” first.";
+            return;
+        }
+        CameraStatus = "Opening the camera…";
+        var (path, error) = await _webcam.TakeSnapshotAsync(name);
+        if (path == null)
+        {
+            CameraPreview = null;
+            CameraStatus = error;
+            return;
+        }
+        try
+        {
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+            bmp.UriSource = new Uri(path);
+            bmp.EndInit();
+            bmp.Freeze();
+            CameraPreview = bmp;
+            CameraStatus = "✔ The camera works.";
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("Camera preview failed", ex);
+            CameraStatus = "The camera picture could not be shown: " + ex.Message;
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
     private async Task TakeScreenshotAsync()
     {
         if (!PrepareCaptureTarget()) return;
@@ -233,6 +321,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(BarText));
         OnPropertyChanged(nameof(StatsText));
         OnPropertyChanged(nameof(EncoderText));
+        OnPropertyChanged(nameof(LicenseStatusLabel));
+        OnPropertyChanged(nameof(LicenseBadgeColor));
         if (++_tick % 20 == 0) UpdateEstimate();
     }
 
@@ -250,7 +340,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             int audioKbps = _s.MicEnabled || _s.SystemAudioEnabled ? _s.AudioBitrateKbps : 0;
             double gbPerHour = SizeEstimator.GbPerHour(kbps, audioKbps);
             double freeGb = _storage.GetFreeSpaceBytes(_s.OutputFolder) / 1073741824.0;
-            _estimate = $"Estimated size: ~{gbPerHour:0.0} GB/hour  •  Free space: {freeGb:0.0} GB" +
+            _estimate = $"Video: {w}×{h} @ {_s.Fps} FPS  •  ≈ {kbps / 1000.0:0.#} Mbps\n" +
+                        $"Estimated size: ~{gbPerHour:0.0} GB/hour  •  Free space: {freeGb:0.0} GB" +
                         (gbPerHour > 0 ? $"  (≈ {freeGb / gbPerHour:0.0} hours of recording)" : "");
         }
         catch { _estimate = ""; }
@@ -351,7 +442,34 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (c.CanExecute(null)) c.Execute(null);
     }
 
+    // ---- License gating ----
+    private void OpenLicenseWindow()
+    {
+        var win = new JeetScreenRecorder.Licensing.LicenseWindow(_license)
+        {
+            Owner = Application.Current.MainWindow
+        };
+        win.ShowDialog();
+        // Refresh recording button (license state may have changed)
+        Refresh();
+    }
+
+    /// <summary>Human-readable license status for the badge in the header.</summary>
+    public string LicenseStatusLabel => _license.StatusLabel;
+
+    /// <summary>Brush for the license badge background color.</summary>
+    public System.Windows.Media.SolidColorBrush LicenseBadgeBrush => _license.Status switch
+    {
+        LicenseStatus.Licensed    => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1A, 0x3A, 0x2A)),
+        LicenseStatus.Offline     => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1A, 0x3A, 0x2A)),
+        LicenseStatus.TrialActive => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2C, 0x28, 0x00)),
+        _                         => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3A, 0x0E, 0x14)),
+    };
+
     public bool IsBusy => _rec.State != RecordingState.Idle;
+
+    public RecordingSettings Settings => _s;
+    public void ShowNotice(string text) => Message = text;
 
     public void PersistSettings()
     {
@@ -371,7 +489,77 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string Message
     {
         get => _message;
-        set { _message = value; OnPropertyChanged(); }
+        set { _message = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMessage)); }
+    }
+
+    public bool HasMessage => !string.IsNullOrEmpty(_message);
+
+    // ---------------- webcam bindable state ----------------
+    public string CameraStatus
+    {
+        get => _cameraStatus;
+        private set { _cameraStatus = value; OnPropertyChanged(); }
+    }
+
+    public ImageSource? CameraPreview
+    {
+        get => _cameraPreview;
+        private set { _cameraPreview = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasCameraPreview)); }
+    }
+
+    public bool HasCameraPreview => _cameraPreview != null;
+
+    public bool WebcamEnabled
+    {
+        get => _s.WebcamEnabled;
+        set { _s.WebcamEnabled = value; PersistSettings(); OnPropertyChanged(); }
+    }
+
+    public string SelectedCameraName
+    {
+        get => _s.WebcamName ?? "";
+        set
+        {
+            if (string.IsNullOrEmpty(value)) return;     // the list is being refreshed
+            _s.WebcamName = value;
+            CameraPreview = null;
+            PersistSettings();
+            OnPropertyChanged();
+        }
+    }
+
+    public bool WebcamMirror
+    {
+        get => _s.WebcamMirror;
+        set { _s.WebcamMirror = value; PersistSettings(); OnPropertyChanged(); }
+    }
+
+    public string SelectedWebcamPosition
+    {
+        get => WebcamPositionOptions[Math.Clamp((int)_s.WebcamPosition, 0, WebcamPositionOptions.Length - 1)];
+        set
+        {
+            int i = Array.IndexOf(WebcamPositionOptions, value);
+            if (i < 0) return;
+            _s.WebcamPosition = (WebcamCorner)i;
+            _s.WebcamOverlayPlaced = false;   // use the chosen corner again
+            PersistSettings();
+            OnPropertyChanged();
+        }
+    }
+
+    public string SelectedWebcamSize
+    {
+        get => WebcamSizeOptions[Math.Clamp((int)_s.WebcamSize, 0, WebcamSizeOptions.Length - 1)];
+        set
+        {
+            int i = Array.IndexOf(WebcamSizeOptions, value);
+            if (i < 0) return;
+            _s.WebcamSize = (WebcamSize)i;
+            _s.WebcamOverlayWidth = 0;        // use the chosen size again
+            PersistSettings();
+            OnPropertyChanged();
+        }
     }
 
     public string EstimateText => _estimate;
@@ -505,6 +693,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _s.Quality = p.Q;
         if (p.Mic is bool m) _s.MicEnabled = m;
         if (p.Sys is bool sy) _s.SystemAudioEnabled = sy;
+        if (p.Cam is bool cm) _s.WebcamEnabled = cm;
         _audio.SetEnabled(_s.MicEnabled, _s.SystemAudioEnabled);
         PersistSettings();
         UpdateResolutionWarning();
@@ -652,7 +841,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         get => _s.MicVolume * 100;
         set
         {
-            _s.MicVolume = Math.Clamp(value / 100, 0, 1);
+            _s.MicVolume = Math.Clamp(value / 100, 0, 4);
             _audio.SetGains(_s.MicVolume, _s.SystemVolume);
             OnPropertyChanged();
         }
@@ -687,12 +876,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanEditSettings));
         OnPropertyChanged(nameof(StatsText));
         OnPropertyChanged(nameof(EncoderText));
+        OnPropertyChanged(nameof(LicenseStatusLabel));
+        OnPropertyChanged(nameof(LicenseBadgeColor));
         StartCommand.Raise();
         PauseResumeCommand.Raise();
         StopCommand.Raise();
         SelectRegionCommand.Raise();
         ChooseFolderCommand.Raise();
         TestAudioCommand.Raise();
+        DetectCamerasCommand.Raise();
+        TestCameraCommand.Raise();
+        LicenseCommand.Raise();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

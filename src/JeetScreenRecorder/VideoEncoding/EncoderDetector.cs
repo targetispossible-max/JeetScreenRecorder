@@ -28,16 +28,28 @@ public sealed class EncoderDetector : IEncoderDetector
             {
                 try
                 {
-                    var opts = new EncoderOptions { EncoderId = c.Id, Fps = 30, BitrateKbps = 4000 };
-                    var (code, err) = await FfmpegRunner.RunAsync(FfmpegArgsBuilder.Build(opts, null, test: true), 20000);
-                    if (code == 0) found.Add(c);
-                    else AppLogger.Info($"Encoder {c.Id} not usable: {err.Trim().Split('\n').LastOrDefault()}");
+                    // 1) with the optional quality switches, 2) plain settings (older graphics cards / drivers)
+                    if (await TestAsync(c, basic: false)) { found.Add(c); continue; }
+                    if (await TestAsync(c, basic: true))
+                    {
+                        found.Add(c with { BasicOnly = true });
+                        AppLogger.Info($"Encoder {c.Id} works only with basic settings");
+                    }
                 }
                 catch (Exception ex) { AppLogger.Error($"Encoder test failed for {c.Id}", ex); }
             }
         }
         found.Add(EncoderSelector.Software);
-        AppLogger.Info("Available encoders: " + string.Join(", ", found.Select(f => f.Id)));
+        AppLogger.Info("Available encoders: " + string.Join(", ", found.Select(f => f.Id + (f.BasicOnly ? " (basic)" : ""))));
         return found;
+    }
+
+    private static async Task<bool> TestAsync(EncoderInfo c, bool basic)
+    {
+        var opts = new EncoderOptions { EncoderId = c.Id, Fps = 30, BitrateKbps = 4000, BasicEncoderArgs = basic };
+        var (code, err) = await FfmpegRunner.RunAsync(FfmpegArgsBuilder.Build(opts, null, test: true), 20000);
+        if (code == 0) return true;
+        AppLogger.Info($"Encoder {c.Id} ({(basic ? "basic" : "best")}) not usable: {err.Trim().Split('\n').LastOrDefault()}");
+        return false;
     }
 }

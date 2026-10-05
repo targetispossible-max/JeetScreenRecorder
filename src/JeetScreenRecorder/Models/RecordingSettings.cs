@@ -42,8 +42,23 @@ public sealed class RecordingSettings
     public double SystemVolume { get; set; } = 0.8;
     public int AudioSampleRate { get; set; } = 48000;
     public int AudioChannels { get; set; } = 2;
-    public int AudioBitrateKbps { get; set; } = 192;
+    public int AudioBitrateKbps { get; set; } = 256;
     public int AudioSyncOffsetMs { get; set; } = 0;   // fine-tune: + makes audio later, - earlier (milliseconds)
+
+    // Webcam (picture-in-picture over the screen recording)
+    public bool WebcamEnabled { get; set; } = false;
+    public string? WebcamName { get; set; }
+    public WebcamCorner WebcamPosition { get; set; } = WebcamCorner.BottomRight;
+    public WebcamSize WebcamSize { get; set; } = WebcamSize.Medium;
+    public bool WebcamMirror { get; set; } = true;
+    // Where the floating webcam window was last left (physical screen pixels). Placed = false -> use the corner chosen above.
+    public bool WebcamOverlayPlaced { get; set; } = false;
+    public int WebcamOverlayX { get; set; }
+    public int WebcamOverlayY { get; set; }
+    public int WebcamOverlayWidth { get; set; }   // 0 = use the Small / Medium / Large choice
+
+    // Set automatically when GPU zero-copy encoding failed once on this PC (e.g. laptops with two graphics cards).
+    public bool DisableZeroCopy { get; set; } = false;
 
     // General
     public bool SimpleMode { get; set; } = true;

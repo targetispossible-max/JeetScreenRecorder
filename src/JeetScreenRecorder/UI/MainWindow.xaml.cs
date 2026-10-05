@@ -2,8 +2,11 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using JeetScreenRecorder.Capture;
 using JeetScreenRecorder.Hotkeys;
+using JeetScreenRecorder.Models;
 using JeetScreenRecorder.Utils;
+using JeetScreenRecorder.VideoEncoding;
 
 namespace JeetScreenRecorder.UI;
 
@@ -18,6 +21,7 @@ public partial class MainWindow : Window
     private readonly MainViewModel _vm;
     private readonly GlobalHotkeyService _hotkeys;
     private RecordingControlWindow? _bar;
+    private WebcamOverlayWindow? _cam;
     private bool _wasActive;
 
     public MainWindow(MainViewModel vm, GlobalHotkeyService hotkeys)
@@ -44,6 +48,7 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             try { _bar?.Close(); } catch { }
+            try { _cam?.Close(); } catch { }
             _vm.Shutdown();
             _hotkeys.Dispose();
         };
@@ -62,14 +67,33 @@ public partial class MainWindow : Window
         {
             _bar ??= new RecordingControlWindow(_vm);
             _bar.ShowOnMonitor(_vm.SelectedMonitor);
+            ShowWebcam();
             WindowState = WindowState.Minimized;
         }
         else
         {
             _bar?.HideBar();
+            _cam?.HideOverlay();
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             Activate();
         }
+    }
+
+    /// <summary>
+    /// Shows the live camera as a window on the screen. The screen recording captures it like any other window,
+    /// and the person can move / resize it while recording.
+    /// </summary>
+    private void ShowWebcam()
+    {
+        var s = _vm.Settings;
+        if (!CaptureOptionsFactory.UsesFloatingWebcam(s)) return;
+        var mon = _vm.SelectedMonitor;
+        // For a custom region the camera starts inside the region (otherwise it would not be recorded).
+        if (mon != null && s.Source == CaptureSource.CustomRegion && CaptureOptionsFactory.IsValidRegion(s, mon))
+            mon = new MonitorInfo(mon.Index, mon.Name, s.RegionWidth, s.RegionHeight, mon.RefreshRate, mon.IsPrimary,
+                                  mon.X + s.RegionX, mon.Y + s.RegionY, mon.DeviceName);
+        _cam ??= new WebcamOverlayWindow(_vm);
+        _cam.ShowOverlay(mon);
     }
 
     /// <summary>Makes this window invisible to screen capture (recording/screenshots) but visible to the user.</summary>

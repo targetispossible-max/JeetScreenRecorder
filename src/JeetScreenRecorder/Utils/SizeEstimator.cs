@@ -12,11 +12,11 @@ public static class SizeEstimator
         long pixels = (long)width * height;
         int at60 = pixels switch
         {
-            <= 854 * 480 => 3000,
-            <= 1280 * 720 => 6000,
-            <= 1920 * 1080 => 12000,
-            <= 2560 * 1440 => 24000,
-            _ => 45000
+            <= 854 * 480 => 4000,
+            <= 1280 * 720 => 8000,
+            <= 1920 * 1080 => 16000,
+            <= 2560 * 1440 => 30000,
+            _ => 60000
         };
         return (int)Math.Round(at60 * (fps / 60.0));
     }

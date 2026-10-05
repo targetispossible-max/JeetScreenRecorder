@@ -8,15 +8,15 @@ public static class FfmpegArgsBuilder
     public static bool IsNvenc(string id) => id.EndsWith("_nvenc", StringComparison.Ordinal);
     private static bool IsQsv(string id) => id.EndsWith("_qsv", StringComparison.Ordinal);
     private static bool IsAmf(string id) => id.EndsWith("_amf", StringComparison.Ordinal);
-    private static bool IsHardware(string id) => IsNvenc(id) || IsQsv(id) || IsAmf(id);
+    public static bool IsHardware(string id) => IsNvenc(id) || IsQsv(id) || IsAmf(id);
 
     public static double QualityMultiplier(QualityPreset q) => q switch
     {
-        QualityPreset.Low => 0.4,
-        QualityPreset.Medium => 0.7,
+        QualityPreset.Low => 0.5,
+        QualityPreset.Medium => 0.75,
         QualityPreset.High => 1.0,
-        QualityPreset.VeryHigh => 1.6,
-        QualityPreset.Lossless => 3.0, // near-lossless (very high bitrate)
+        QualityPreset.VeryHigh => 1.5,
+        QualityPreset.Lossless => 2.2, // "Ultra": near-lossless (very high bitrate)
         _ => 1.0
     };
 
@@ -27,7 +27,9 @@ public static class FfmpegArgsBuilder
         (o.OutputWidth < o.SourceWidth || o.OutputHeight < o.SourceHeight);
 
     public static (int Width, int Height) OutputSize(EncoderOptions o) =>
-        NeedsScale(o) ? (o.OutputWidth, o.OutputHeight) : (o.SourceWidth, o.SourceHeight);
+        NeedsScale(o) ? (o.OutputWidth, o.OutputHeight) : (o.SourceWidth & ~1, o.SourceHeight & ~1);
+
+    public static bool HasWebcam(EncoderOptions o) => !string.IsNullOrWhiteSpace(o.WebcamName);
 
     private static void AppendVideoInput(StringBuilder sb, EncoderOptions o, int fps, bool mouse)
     {
@@ -50,25 +52,53 @@ public static class FfmpegArgsBuilder
         }
     }
 
+    private static void AppendWebcamInput(StringBuilder sb, EncoderOptions o)
+    {
+        var name = (o.WebcamName ?? "").Replace("\"", "");
+        sb.Append("-f dshow -rtbufsize 256M -thread_queue_size 512 ");
+        if (!o.WebcamAutoFormat)
+            sb.Append($"-video_size {o.WebcamWidth}x{o.WebcamHeight} -framerate {o.WebcamFps} ");
+        sb.Append($"-i \"video={name}\" ");
+    }
+
     public static string Build(EncoderOptions o, string? outputPath, bool test = false)
     {
         var sb = new StringBuilder("-hide_banner -y -loglevel error ");
-        if (!test) sb.Append("-progress pipe:1 -nostats -stats_period 0.1 ");
+
+        if (test)
+        {
+            // Encoder self-test with a made-up picture: independent of the display and of the camera,
+            // so a hardware encoder is never rejected only because screen capture is unavailable.
+            sb.Append("-f lavfi -i \"testsrc2=size=1280x720:rate=30\" ");
+            sb.Append($"-vf \"format={(IsHardware(o.EncoderId) ? "nv12" : "yuv420p")}\" ");
+            AppendEncoder(sb, o);
+            sb.Append("-frames:v 10 -f null -");
+            return sb.ToString();
+        }
+
+        sb.Append("-progress pipe:1 -nostats -stats_period 0.1 ");
         bool gpuFrames = o.Backend == CaptureBackend.DesktopDuplication && o.WindowHandle == 0;
+        bool cam = HasWebcam(o);
 
         // ---- inputs (all inputs must come before any output option) ----
         AppendVideoInput(sb, o, o.Fps, o.DrawMouse);
+        if (cam) AppendWebcamInput(sb, o);
 
         // ---- video filters ----
-        // NVENC can take GPU frames directly (zero-copy) when no scaling is needed.
-        bool cpuPath = !gpuFrames || !IsNvenc(o.EncoderId) || NeedsScale(o);
-        if (cpuPath) sb.Append($"-vf \"{CpuFilter(o, gpuFrames)}\" ");
+        if (cam)
+        {
+            sb.Append($"-filter_complex \"{WebcamGraph(o, gpuFrames)}\" -map \"[v]\" ");
+        }
+        else
+        {
+            // NVENC can take GPU frames directly (zero-copy) when no scaling is needed.
+            bool cpuPath = !gpuFrames || !IsNvenc(o.EncoderId) || NeedsScale(o) || o.ForceCpuFrames;
+            if (cpuPath) sb.Append($"-vf \"{CpuFilter(o, gpuFrames)}\" ");
+        }
 
         AppendEncoder(sb, o);
-        sb.Append($"-g {o.Fps * 2} ");
-
-        if (test) sb.Append("-frames:v 5 -f null -");
-        else sb.Append($"\"{outputPath}\"");
+        sb.Append($"-g {o.Fps * 2} -colorspace bt709 -color_primaries bt709 -color_trc bt709 ");
+        sb.Append($"\"{outputPath}\"");
         return sb.ToString();
     }
 
@@ -108,13 +138,61 @@ public static class FfmpegArgsBuilder
         return sb.ToString();
     }
 
+    /// <summary>One frame from a camera, used by the "Test camera" button.</summary>
+    public static string BuildCameraSnapshot(string cameraName, string outputPath, bool autoFormat)
+    {
+        var name = cameraName.Replace("\"", "");
+        var sb = new StringBuilder("-hide_banner -y -loglevel error -f dshow -rtbufsize 64M ");
+        if (!autoFormat) sb.Append("-video_size 1280x720 -framerate 30 ");
+        sb.Append($"-i \"video={name}\" -frames:v 1 -update 1 \"{outputPath}\"");
+        return sb.ToString();
+    }
+
+    /// <summary>Camera width in pixels for the given video width (even number, never more than half the video).</summary>
+    public static int WebcamWidthFor(int videoWidth, int percent)
+    {
+        int w = (int)(videoWidth * Math.Clamp(percent, 5, 50) / 100.0);
+        w = Math.Min(w, videoWidth / 2);
+        return Math.Max(64, w) & ~1;
+    }
+
+    private static string WebcamGraph(EncoderOptions o, bool fromGpuFrames)
+    {
+        var (w, _) = OutputSize(o);
+        int camW = WebcamWidthFor(w, o.WebcamPercent);
+        int margin = Math.Max(12, w / 80);
+
+        var bg = new List<string>();
+        if (fromGpuFrames) { bg.Add("hwdownload"); bg.Add("format=bgra"); }
+        bg.Add(NeedsScale(o)
+            ? $"scale={o.OutputWidth}:{o.OutputHeight}:flags=lanczos:out_color_matrix=bt709"
+            : "scale=trunc(iw/2)*2:trunc(ih/2)*2:out_color_matrix=bt709");
+        bg.Add("format=yuv420p");
+
+        var cam = new List<string>();
+        if (o.WebcamMirror) cam.Add("hflip");
+        cam.Add($"scale={camW}:-2:flags=bicubic");
+        cam.Add("format=yuv420p");
+
+        string pos = o.WebcamCorner switch
+        {
+            WebcamCorner.BottomLeft => $"x={margin}:y=H-h-{margin}",
+            WebcamCorner.TopRight => $"x=W-w-{margin}:y={margin}",
+            WebcamCorner.TopLeft => $"x={margin}:y={margin}",
+            _ => $"x=W-w-{margin}:y=H-h-{margin}"
+        };
+        string last = IsHardware(o.EncoderId) ? "nv12" : "yuv420p";
+        return $"[0:v]{string.Join(",", bg)}[bg];[1:v]{string.Join(",", cam)}[cam];[bg][cam]overlay={pos},format={last}[v]";
+    }
+
     private static string CpuFilter(EncoderOptions o, bool fromGpuFrames)
     {
         var f = new List<string>();
         if (fromGpuFrames) { f.Add("hwdownload"); f.Add("format=bgra"); }
+        // lanczos keeps text sharp when the picture is made smaller; bt709 gives correct HD colours
         f.Add(NeedsScale(o)
-            ? $"scale={o.OutputWidth}:{o.OutputHeight}:flags=bicubic"
-            : "scale=trunc(iw/2)*2:trunc(ih/2)*2");
+            ? $"scale={o.OutputWidth}:{o.OutputHeight}:flags=lanczos:out_color_matrix=bt709"
+            : "scale=trunc(iw/2)*2:trunc(ih/2)*2:out_color_matrix=bt709");
         f.Add(IsHardware(o.EncoderId) ? "format=nv12" : "format=yuv420p");
         return string.Join(",", f);
     }
@@ -123,13 +201,24 @@ public static class FfmpegArgsBuilder
     {
         int k = o.BitrateKbps, max = k * 3 / 2, buf = k * 2;
         var id = o.EncoderId;
+        bool best = !o.BasicEncoderArgs;   // "best" adds optional quality switches; the app falls back to basic if a GPU rejects them
         if (IsNvenc(id))
-            sb.Append($"-c:v {id} -preset p4 -rc vbr -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
+        {
+            sb.Append($"-c:v {id} -preset p5 -rc vbr -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
+            if (best) sb.Append("-tune hq -spatial-aq 1 -rc-lookahead 16 ");
+        }
         else if (IsQsv(id))
-            sb.Append($"-c:v {id} -preset medium -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
+        {
+            sb.Append($"-c:v {id} -preset {(best ? "slow" : "medium")} -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
+        }
         else if (IsAmf(id))
-            sb.Append($"-c:v {id} -quality balanced -rc vbr_peak -b:v {k}k -maxrate {max}k ");
+        {
+            sb.Append($"-c:v {id} -quality {(best ? "quality" : "balanced")} -rc vbr_peak -b:v {k}k -maxrate {max}k ");
+        }
         else
-            sb.Append($"-c:v libx264 -preset veryfast -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
+        {
+            var preset = string.IsNullOrWhiteSpace(o.X264Preset) ? "veryfast" : o.X264Preset;
+            sb.Append($"-c:v libx264 -preset {preset} -profile:v high -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
+        }
     }
 }

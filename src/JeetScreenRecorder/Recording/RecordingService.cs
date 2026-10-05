@@ -164,48 +164,106 @@ public sealed class RecordingService : IRecordingService
     {
         int index = _segments.Count + 1;
         var path = SegmentMuxer.VideoPath(_partsDir, index);
-        var encoder = _encoderFactory();
-        encoder.StatsUpdated += OnStats;
-        AudioFileSink? file = null;
-        try
-        {
-            if (_useAudio) file = new AudioFileSink(SegmentMuxer.PcmPath(_partsDir, index));
-            // The audio file is connected to the mixer only when the first video frame has been written
-            // (see OnStats), so that audio and video start at the same moment.
-            lock (_attachLock) { _curIndex = index; _audioFile = file; _audioPending = file != null; _audioDelay = 0; }
-            await encoder.StartAsync(_opts, path);
-        }
-        catch (EncoderStartException ex)
-        {
-            AppLogger.Error("Encoder failed to start", ex);
-            DropAudioFile(file);
-            await encoder.DisposeAsync();
 
-            if (_opts.Backend == CaptureBackend.DesktopDuplication)
-            {
-                _opts = _opts with { Backend = CaptureBackend.Gdigrab };
-                Notice?.Invoke(this, "GPU screen capture is not available on this display. Switched to compatible capture.");
-                await StartSegmentAsync();
-                return;
-            }
-            if (_opts.EncoderId != "libx264")
-            {
-                _opts = _opts with { EncoderId = "libx264" };
-                _encName = "Software (x264)";
-                Notice?.Invoke(this, "Your selected hardware encoder is unavailable. The application has switched to software encoding.");
-                await StartSegmentAsync();
-                return;
-            }
-            throw;
-        }
-        catch
+        // Tries the best settings first. If the PC cannot do something (camera, GPU capture, hardware encoder),
+        // step by step simpler settings are used, so recording works on every Windows PC.
+        while (true)
         {
-            DropAudioFile(file);
-            await encoder.DisposeAsync();
-            throw;
+            var encoder = _encoderFactory();
+            encoder.StatsUpdated += OnStats;
+            AudioFileSink? file = null;
+            try
+            {
+                if (_useAudio) file = new AudioFileSink(SegmentMuxer.PcmPath(_partsDir, index));
+                // The audio file is connected to the mixer only when the first video frame has been written
+                // (see OnStats), so that audio and video start at the same moment.
+                lock (_attachLock) { _curIndex = index; _audioFile = file; _audioPending = file != null; _audioDelay = 0; }
+                await encoder.StartAsync(_opts, path);
+                _enc = encoder;
+                _segments.Add(path);
+                return;
+            }
+            catch (EncoderStartException ex)
+            {
+                AppLogger.Error("Encoder failed to start", ex);
+                DropAudioFile(file);
+                await encoder.DisposeAsync();
+                if (!TryDowngrade(ex)) throw;
+            }
+            catch
+            {
+                DropAudioFile(file);
+                await encoder.DisposeAsync();
+                throw;
+            }
         }
-        _enc = encoder;
-        _segments.Add(path);
+    }
+
+    private static bool LooksLikeCameraError(EncoderStartException ex)
+    {
+        var t = ex.Details.Length > 0 ? ex.Details : ex.Message;
+        return t.Contains("dshow", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("video=", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("Could not run graph", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void DropWebcam()
+    {
+        _opts = _opts with { WebcamName = null };
+        Notice?.Invoke(this, "The webcam could not be started (another app may be using it, or camera access is off in Windows Privacy settings). Recording continues without the webcam.");
+    }
+
+    /// <summary>Switches to the next simpler setting. Returns false when nothing simpler is left.</summary>
+    private bool TryDowngrade(EncoderStartException ex)
+    {
+        bool cam = FfmpegArgsBuilder.HasWebcam(_opts);
+        bool hw = FfmpegArgsBuilder.IsHardware(_opts.EncoderId);
+
+        if (cam && LooksLikeCameraError(ex))
+        {
+            if (!_opts.WebcamAutoFormat)
+            {
+                _opts = _opts with { WebcamAutoFormat = true };   // camera may not offer 1280x720 @ 30
+                AppLogger.Warn("Camera: retrying with the camera's own format");
+            }
+            else DropWebcam();
+            return true;
+        }
+        // GPU frames straight into NVENC fail e.g. on laptops with two graphics cards -> copy frames through the CPU
+        if (!cam && FfmpegArgsBuilder.IsNvenc(_opts.EncoderId) && !_opts.ForceCpuFrames
+            && _opts.Backend == CaptureBackend.DesktopDuplication && _opts.WindowHandle == 0)
+        {
+            _opts = _opts with { ForceCpuFrames = true };
+            _settings.Current.DisableZeroCopy = true;
+            try { _settings.Save(); } catch { }
+            AppLogger.Warn("GPU zero-copy failed; using the compatible frame path from now on");
+            return true;
+        }
+        if (hw && !_opts.BasicEncoderArgs)
+        {
+            _opts = _opts with { BasicEncoderArgs = true };
+            AppLogger.Warn("Hardware encoder: retrying with basic settings");
+            return true;
+        }
+        if (_opts.Backend == CaptureBackend.DesktopDuplication && _opts.WindowHandle == 0)
+        {
+            _opts = _opts with { Backend = CaptureBackend.Gdigrab };
+            Notice?.Invoke(this, "GPU screen capture is not available on this display. Switched to compatible capture.");
+            return true;
+        }
+        if (_opts.EncoderId != "libx264")
+        {
+            _opts = _opts with { EncoderId = "libx264", BasicEncoderArgs = false };
+            _encName = "Software (x264)";
+            Notice?.Invoke(this, "Your selected hardware encoder is unavailable. The application has switched to software encoding.");
+            return true;
+        }
+        if (cam)
+        {
+            DropWebcam();   // last resort: the cause was not recognised, so try without the camera
+            return true;
+        }
+        return false;
     }
 
     private void DropAudioFile(AudioFileSink? file)
@@ -365,9 +423,19 @@ public sealed class RecordingService : IRecordingService
             EncoderId = enc.Id,
             BitrateKbps = kbps,
             AudioSampleRate = s.AudioSampleRate,
-            AudioBitrateKbps = s.AudioBitrateKbps
+            AudioBitrateKbps = s.AudioBitrateKbps,
+            BasicEncoderArgs = enc.BasicOnly,
+            X264Preset = SoftwarePreset()
         };
     }
+
+    /// <summary>Weak PCs get a faster x264 preset so recording stays smooth; strong PCs get a better-looking one.</summary>
+    private static string SoftwarePreset() => Environment.ProcessorCount switch
+    {
+        <= 4 => "superfast",
+        >= 12 => "faster",
+        _ => "veryfast"
+    };
 
     private void CheckDisk()
     {
