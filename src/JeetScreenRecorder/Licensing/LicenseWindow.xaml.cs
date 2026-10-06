@@ -9,7 +9,7 @@ namespace JeetScreenRecorder.Licensing;
 /// Shows:
 ///   • Current status (trial / licensed / expired)
 ///   • "Enter License Key" form
-///   • "Buy License" button → opens BuyWindow
+///   • "Buy License" button → opens the purchase page on our website in the default browser
 ///   • "Deactivate this PC" for licensed users (frees the device slot)
 /// </summary>
 public partial class LicenseWindow : Window
@@ -104,8 +104,20 @@ public partial class LicenseWindow : Window
 
     private void BtnBuy_Click(object sender, RoutedEventArgs e)
     {
-        new BuyWindow(_lic) { Owner = this }.ShowDialog();
-        Refresh();
+        // Buying happens on our website (secure payment page); the app only takes the license key.
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(LicenseApiClient.BuyPageUrl)
+            {
+                UseShellExecute = true
+            });
+            ShowMessage("Opening our website. After you pay, your license key is e-mailed to you. Paste it above and click Activate.", error: false);
+        }
+        catch (Exception ex)
+        {
+            Utils.AppLogger.Warn("Could not open the buy page: " + ex.Message);
+            ShowMessage("Could not open your browser. Please visit " + LicenseApiClient.BuyPageUrl + " to buy a license.", error: true);
+        }
     }
 
     // ----------------------------------------------------------------- Deactivate
