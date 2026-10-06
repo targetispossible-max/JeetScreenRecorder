@@ -30,7 +30,13 @@ internal sealed class LicenseApiClient : IDisposable
     })
     {
         Timeout = TimeSpan.FromSeconds(15),
-        DefaultRequestHeaders = { { "User-Agent", "JeetScreenRecorder/" + AppVersion } }
+        // Browser-like headers: some web hosts' firewalls reject API calls that send no Accept header.
+        DefaultRequestHeaders =
+        {
+            { "User-Agent",      "JeetScreenRecorder/" + AppVersion + " (Windows)" },
+            { "Accept",          "application/json" },
+            { "Accept-Language", "en-US,en;q=0.9" },
+        }
     };
 
     // -----------------------------------------------------------------------  API calls
@@ -156,12 +162,21 @@ internal sealed class LicenseApiClient : IDisposable
 
         var text = await resp.Content.ReadAsStringAsync(ct);
         var httpStatus = (int)resp.StatusCode;
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var snippet = text.Length > 400 ? text.Substring(0, 400) : text;
+            Utils.AppLogger.Warn($"License server {path} -> HTTP {httpStatus}: {snippet.Replace('\r', ' ').Replace('\n', ' ')}");
+        }
+
         JsonElement root;
         try   { root = JsonSerializer.Deserialize<JsonElement>(text); }
         catch
         {
             if (!resp.IsSuccessStatusCode)
-                throw new LicenseException("Server error (HTTP " + httpStatus + ").", httpStatus);
+                throw new LicenseException(
+                    "Server error (HTTP " + httpStatus + "). The server did not return a license answer - " +
+                    "the web host or firewall may be blocking the request.", httpStatus, isJsonReply: false);
             throw new LicenseException("Server returned unexpected response.");
         }
 
@@ -169,10 +184,19 @@ internal sealed class LicenseApiClient : IDisposable
         if (!resp.IsSuccessStatusCode)
         {
             var msg = "Server error (HTTP " + httpStatus + ").";
-            if (root.ValueKind == JsonValueKind.Object &&
-                root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String)
-                msg = m.GetString() ?? msg;
-            throw new LicenseException(msg, httpStatus);
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var key in new[] { "message", "error", "detail", "reason" })
+                {
+                    if (root.TryGetProperty(key, out var m) && m.ValueKind == JsonValueKind.String &&
+                        !string.IsNullOrWhiteSpace(m.GetString()))
+                    {
+                        msg = m.GetString()!;
+                        break;
+                    }
+                }
+            }
+            throw new LicenseException(msg, httpStatus, isJsonReply: true);
         }
 
         return root;

@@ -86,7 +86,14 @@ internal sealed class LicenseException : Exception
     public int HttpStatus { get; }
 
     public LicenseException(string message) : base(message) { }
-    public LicenseException(string message, int httpStatus) : base(message) { HttpStatus = httpStatus; }
+    /// <summary>True if the server's reply body was valid JSON (i.e. our license app answered, not a firewall/host error page).</summary>
+    public bool IsJsonReply { get; }
+
+    public LicenseException(string message, int httpStatus, bool isJsonReply = false) : base(message)
+    {
+        HttpStatus = httpStatus;
+        IsJsonReply = isJsonReply;
+    }
     public LicenseException(string message, Exception inner) : base(message, inner) { }
 
     /// <summary>
@@ -94,8 +101,9 @@ internal sealed class LicenseException : Exception
     /// network problem or a server crash. Used to lock a blocked trial instead of calling it "no internet".
     /// </summary>
     public bool IsServerRefusal =>
-        HttpStatus is 401 or 402 or 403 or 410 or 423 ||
-        (HttpStatus != 0 && (Message.Contains("block",    StringComparison.OrdinalIgnoreCase) ||
-                             Message.Contains("expired",  StringComparison.OrdinalIgnoreCase) ||
-                             Message.Contains("disabled", StringComparison.OrdinalIgnoreCase)));
+        IsJsonReply &&   // an HTML 403 from the web host / firewall must NOT lock the trial
+        (HttpStatus is 401 or 402 or 403 or 410 or 423 ||
+         (HttpStatus != 0 && (Message.Contains("block",    StringComparison.OrdinalIgnoreCase) ||
+                              Message.Contains("expired",  StringComparison.OrdinalIgnoreCase) ||
+                              Message.Contains("disabled", StringComparison.OrdinalIgnoreCase))));
 }
