@@ -55,6 +55,16 @@ public partial class LicenseWindow : Window
             txtDetail.Text = $"Free trial: {_lic.TrialDaysLeft} day(s) remaining.";
             txtDetail.Foreground = new SolidColorBrush(Color.FromRgb(0xA3, 0xB3, 0xCF));
         }
+        else if (_lic.Status == LicenseStatus.TrialExpired)
+        {
+            txtDetail.Text = "Your free trial has ended. Please buy a license to continue screen recording.";
+            txtDetail.Foreground = new SolidColorBrush(Color.FromRgb(0xF0, 0x38, 0x4A));
+        }
+        else if (_lic.Status == LicenseStatus.Expired)
+        {
+            txtDetail.Text = "Your license has expired. Please buy or renew a license to continue screen recording.";
+            txtDetail.Foreground = new SolidColorBrush(Color.FromRgb(0xF0, 0x38, 0x4A));
+        }
         else
         {
             txtDetail.Text = "Please activate a license or buy one below.";
