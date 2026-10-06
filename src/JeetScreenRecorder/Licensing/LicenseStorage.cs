@@ -90,6 +90,8 @@ internal sealed class LicenseCache
     // --- trial fields ---
     public bool    TrialActive       { get; set; }
     public int     TrialDaysRemaining { get; set; }
+    /// <summary>When the trial ends (server time, UTC). Lets the app lock itself at the exact moment, even offline.</summary>
+    public DateTimeOffset TrialExpiresUtc { get; set; } = DateTimeOffset.MinValue;
 
     // --- offline support ---
     /// <summary>UTC of the last successful server verification.</summary>
