@@ -15,6 +15,9 @@ internal sealed class LicenseApiClient : IDisposable
     // License server base URL (no trailing slash, no /admin).
     public const string ServerBase = "https://adm.jsrecorder.com";
 
+    // Where the "Buy License" buttons send people (our website; it has the Buy Now button).
+    public const string BuyPageUrl = "https://jsrecorder.com/pricing/";
+
     // App version reported to the server (used for admin info only, not gating)
     public static string AppVersion => "0.2.0";
 
