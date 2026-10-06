@@ -89,9 +89,9 @@
 
             <Border Height="1" Background="#263553" Margin="0,20,0,20"/>
 
-            <TextBlock Text="Don't have a license key yet?" Foreground="#A3B3CF"
+            <TextBlock Text="Don't have a license key yet? Buy one on our website, then paste the key above." Foreground="#A3B3CF"
                        FontSize="13" Margin="0,0,0,10" TextWrapping="Wrap"/>
-            <Button x:Name="btnBuy" Content="🛒  Buy License"
+            <Button x:Name="btnBuy" Content="🛒  Buy License (opens website)"
                     Style="{StaticResource DangerButton}" Click="BtnBuy_Click"
                     HorizontalAlignment="Stretch" Height="42" FontSize="14"/>
 
