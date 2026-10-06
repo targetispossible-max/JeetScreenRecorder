@@ -56,6 +56,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private int _countdown;
     private bool _starting;
     private int _tick;
+    private string? _lastLicStatus;       // detects license state changes (trial ended, license activated ...)
+    private bool _licPromptShown;         // the Buy License window opens by itself only once per expiry
+    private string _licNotice = "";       // the expiry message we put in the banner (so we can remove it again)
     private double _micLevel, _sysLevel;
     private WindowInfo? _selectedWindow;
     private ImageSource? _cameraPreview;
@@ -127,7 +130,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         TestAudioCommand = new RelayCommand(ToggleTestAudio, () => _rec.State == RecordingState.Idle);
         DetectCamerasCommand = new RelayCommand(() => Run(DetectCamerasAsync), () => _rec.State == RecordingState.Idle);
         TestCameraCommand = new RelayCommand(() => Run(TestCameraAsync), () => _rec.State == RecordingState.Idle);
-        LicenseCommand = new RelayCommand(OpenLicenseWindow);
+        LicenseCommand = new RelayCommand(() => OpenLicenseWindow());
 
         _rec.StateChanged += (_, _) => Refresh();
         _rec.Notice += (_, msg) => Application.Current.Dispatcher.Invoke(() => Message = msg);
@@ -323,6 +326,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(EncoderText));
         OnPropertyChanged(nameof(LicenseStatusLabel));
         OnPropertyChanged(nameof(LicenseBadgeBrush));
+        OnPropertyChanged(nameof(LicenseButtonText));
+        CheckLicenseTransition();
         if (++_tick % 20 == 0) UpdateEstimate();
     }
 
@@ -453,6 +458,43 @@ public sealed class MainViewModel : INotifyPropertyChanged
         // Refresh recording button (license state may have changed)
         Refresh();
     }
+
+    /// <summary>
+    /// Runs on every timer tick. When the license state changes (the background check finished, the trial
+    /// ended while the app was open, a license was just bought/activated) it refreshes the Start button, and
+    /// when the trial/license has run out it shows an English message and opens the Buy License window once.
+    /// Recording that is already running is never interrupted - the lock applies to the next start.
+    /// </summary>
+    private void CheckLicenseTransition()
+    {
+        var st = _license.Status;
+        if (st == _lastLicStatus) return;
+        _lastLicStatus = st;
+        Refresh();   // re-evaluates StartCommand (CanRecord) and the badge
+
+        if (st is LicenseStatus.TrialExpired or LicenseStatus.Expired)
+        {
+            _licNotice = st == LicenseStatus.TrialExpired
+                ? "Your free trial has ended. Please buy a license to continue screen recording."
+                : "Your license has expired. Please buy or renew a license to continue screen recording.";
+            Message = _licNotice;
+
+            if (!_licPromptShown && _rec.State == RecordingState.Idle)
+            {
+                _licPromptShown = true;
+                Application.Current.Dispatcher.BeginInvoke(new Action(() => OpenLicenseWindow()));
+            }
+        }
+        else
+        {
+            if (_licNotice.Length > 0 && Message == _licNotice) Message = "";
+            _licNotice = "";
+            if (st is LicenseStatus.Licensed or LicenseStatus.TrialActive) _licPromptShown = false;
+        }
+    }
+
+    /// <summary>Text of the header button: "Buy License" once the trial/license has run out.</summary>
+    public string LicenseButtonText => _license.IsExpired ? "🛒 Buy License" : "🔑 License";
 
     /// <summary>Human-readable license status for the badge in the header.</summary>
     public string LicenseStatusLabel => _license.StatusLabel;
@@ -878,6 +920,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(EncoderText));
         OnPropertyChanged(nameof(LicenseStatusLabel));
         OnPropertyChanged(nameof(LicenseBadgeBrush));
+        OnPropertyChanged(nameof(LicenseButtonText));
         StartCommand.Raise();
         PauseResumeCommand.Raise();
         StopCommand.Raise();
