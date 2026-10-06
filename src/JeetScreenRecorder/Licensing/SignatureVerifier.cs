@@ -82,6 +82,20 @@ internal static class SignatureVerifier
 /// <summary>Thrown when the license server returns an error or verification fails.</summary>
 internal sealed class LicenseException : Exception
 {
+    /// <summary>HTTP status of the server reply (0 = no reply, e.g. network error).</summary>
+    public int HttpStatus { get; }
+
     public LicenseException(string message) : base(message) { }
+    public LicenseException(string message, int httpStatus) : base(message) { HttpStatus = httpStatus; }
     public LicenseException(string message, Exception inner) : base(message, inner) { }
+
+    /// <summary>
+    /// True when the server answered and refused (blocked / forbidden / gone), as opposed to a
+    /// network problem or a server crash. Used to lock a blocked trial instead of calling it "no internet".
+    /// </summary>
+    public bool IsServerRefusal =>
+        HttpStatus is 401 or 402 or 403 or 410 or 423 ||
+        (HttpStatus != 0 && (Message.Contains("block",    StringComparison.OrdinalIgnoreCase) ||
+                             Message.Contains("expired",  StringComparison.OrdinalIgnoreCase) ||
+                             Message.Contains("disabled", StringComparison.OrdinalIgnoreCase)));
 }

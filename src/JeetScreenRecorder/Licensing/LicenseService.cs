@@ -57,8 +57,8 @@ public sealed class LicenseService
         {
             if (_cache.Status == LicenseStatus.Licensed)
                 await HeartbeatAsync(CancellationToken.None);
-            else if (_cache.Status == LicenseStatus.TrialActive)
-                await RegisterOrVerifyTrialAsync(CancellationToken.None);   // keeps trial days / extensions in sync
+            else if (_cache.Status is LicenseStatus.TrialActive or LicenseStatus.TrialExpired)
+                await RegisterOrVerifyTrialAsync(CancellationToken.None);   // keeps trial days / extensions / unblock in sync
         };
         _heartbeatTimer.Start();
     }
@@ -91,6 +91,12 @@ public sealed class LicenseService
     public bool IsTrialActive => EffectiveStatus == LicenseStatus.TrialActive;
     public bool IsExpired   => EffectiveStatus is LicenseStatus.Expired or LicenseStatus.TrialExpired;
 
+    /// <summary>True once the first startup check (success or failure) has finished.</summary>
+    public bool CheckFinished { get; private set; }
+
+    /// <summary>Last refusal text from the server (why a trial was blocked), if any.</summary>
+    public string? ServerMessage => _cache.ServerMessage;
+
     public string? ExpiresOn      => _cache.ExpiresOn;
     public string? LicenseType    => _cache.LicenseType;
     public int     DaysRemaining  => _cache.DaysRemaining;
@@ -113,7 +119,7 @@ public sealed class LicenseService
         LicenseStatus.Disabled     => "License Disabled",
         LicenseStatus.Offline      => $"✔ Licensed (offline)  •  Expires {FormatDate(_cache.ExpiresOn)}",
         LicenseStatus.NoInternet   => "No internet connection",
-        _                          => "Checking…"
+        _                          => CheckFinished ? "License not verified" : "Checking…"
     };
 
     // Payment reference kept during buy flow
@@ -129,7 +135,17 @@ public sealed class LicenseService
     {
         if (_initialised) return;
         _initialised = true;
+        try   { await InitialiseCoreAsync(ct); }
+        catch (Exception ex) { AppLogger.Error("License initialise failed", ex); }
+        finally
+        {
+            CheckFinished = true;
+            AppLogger.Info($"License check finished: status={Status}");
+        }
+    }
 
+    private async Task InitialiseCoreAsync(CancellationToken ct)
+    {
         // Clock-rollback check
         if (IsClockSuspicious())
         {
@@ -163,7 +179,18 @@ public sealed class LicenseService
 
             if (!resp.TryGetProperty("signed",    out var signedEl) ||
                 !resp.TryGetProperty("signature", out var sigEl))
+            {
+                // Unsigned answer: the server is refusing (e.g. {"status":"trial_blocked","message":"..."}).
+                var plainStatus = resp.ValueKind == JsonValueKind.Object ? (TryStr(resp, "status")  ?? "") : "";
+                var plainMsg    = resp.ValueKind == JsonValueKind.Object ?  TryStr(resp, "message")        : null;
+                AppLogger.Warn($"Trial reply had no signature: status='{plainStatus}', message='{plainMsg}'");
+                if (MapTrialStatus(plainStatus) == LicenseStatus.TrialExpired)
+                {
+                    LockTrial(plainMsg);
+                    return;
+                }
                 throw new LicenseException("Trial response missing signature.");
+            }
 
             var payload = SignatureVerifier.VerifyAndParse(
                 signedEl.GetString()!,
@@ -171,11 +198,16 @@ public sealed class LicenseService
                 nonce,
                 devId);
 
-            var status = payload["status"].GetString() ?? "";
+            var rawStatus = payload.TryGetValue("status", out var stEl) && stEl.ValueKind == JsonValueKind.String
+                                ? stEl.GetString() ?? ""
+                                : "";
+            var status = MapTrialStatus(rawStatus);
+            AppLogger.Info($"Trial status from server: '{rawStatus}' -> {status}");
 
             _cache.Status             = status;
-            _cache.TrialActive        = status == "trial_active";
-            _cache.TrialDaysRemaining = payload.TryGetValue("days_remaining", out var dr) ? dr.GetInt32() : 0;
+            _cache.TrialActive        = status == LicenseStatus.TrialActive;
+            _cache.ServerMessage      = status == LicenseStatus.TrialActive ? null : TryStrFromPayload(payload, "message");
+            _cache.TrialDaysRemaining = payload.TryGetValue("days_remaining", out var dr) && dr.ValueKind == JsonValueKind.Number ? dr.GetInt32() : 0;
             _cache.TrialExpiresUtc    = payload.TryGetValue("trial_expires_at", out var te) &&
                                         te.ValueKind == JsonValueKind.String &&
                                         DateTimeOffset.TryParse(te.GetString(), out var teDto)
@@ -187,8 +219,17 @@ public sealed class LicenseService
         }
         catch (LicenseException ex)
         {
-            AppLogger.Warn("Trial register failed: " + ex.Message);
-            // If we already had a cached trial status, keep it
+            AppLogger.Warn($"Trial register failed (HTTP {ex.HttpStatus}): {ex.Message}");
+
+            // The server answered and refused (blocked / forbidden) -> lock the trial, even if it was
+            // active in the cache. This is what makes the admin "Block" button actually work.
+            if (ex.IsServerRefusal)
+            {
+                LockTrial(ex.Message);
+                return;
+            }
+
+            // Network problem: if we already had a cached trial status, keep it
             if (_cache.Status is LicenseStatus.TrialActive or LicenseStatus.TrialExpired) return;
             _cache.Status = LicenseStatus.NoInternet;
             // Do NOT save - let next launch retry
@@ -199,6 +240,27 @@ public sealed class LicenseService
             if (_cache.Status is LicenseStatus.TrialActive or LicenseStatus.TrialExpired) return;
             _cache.Status = LicenseStatus.NoInternet;
         }
+    }
+
+    /// <summary>Server trial status -> app status. Any "trial_*" other than trial_active (blocked, ended ...) locks recording.</summary>
+    private static string MapTrialStatus(string raw)
+    {
+        var s = (raw ?? "").Trim().ToLowerInvariant();
+        if (s == "trial_active") return LicenseStatus.TrialActive;
+        if (s == "trial_expired" || s == "expired" || s == "blocked" || s == "disabled" ||
+            s.Contains("block") || (s.StartsWith("trial_") && s != "trial_active"))
+            return LicenseStatus.TrialExpired;
+        return LicenseStatus.Unknown;
+    }
+
+    private void LockTrial(string? serverMessage)
+    {
+        _cache.Status        = LicenseStatus.TrialExpired;
+        _cache.TrialActive   = false;
+        _cache.ServerMessage = serverMessage;
+        _cache.LastVerifiedUtc = DateTimeOffset.UtcNow;
+        LicenseStorage.Save(_cache);
+        AppLogger.Info("Trial locked by server (blocked or ended).");
     }
 
     // -----------------------------------------------------------------------

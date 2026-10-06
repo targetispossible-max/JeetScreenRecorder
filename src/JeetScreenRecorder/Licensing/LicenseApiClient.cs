@@ -155,16 +155,24 @@ internal sealed class LicenseApiClient : IDisposable
         catch (HttpRequestException ex) { throw new LicenseException("Cannot reach license server: " + ex.Message); }
 
         var text = await resp.Content.ReadAsStringAsync(ct);
+        var httpStatus = (int)resp.StatusCode;
         JsonElement root;
         try   { root = JsonSerializer.Deserialize<JsonElement>(text); }
-        catch { throw new LicenseException("Server returned unexpected response."); }
+        catch
+        {
+            if (!resp.IsSuccessStatusCode)
+                throw new LicenseException("Server error (HTTP " + httpStatus + ").", httpStatus);
+            throw new LicenseException("Server returned unexpected response.");
+        }
 
-        // surface server-level errors (non-200) as LicenseException
+        // surface server-level errors (non-200) as LicenseException (with the HTTP status)
         if (!resp.IsSuccessStatusCode)
         {
-            var msg = "Server error.";
-            if (root.TryGetProperty("message", out var m)) msg = m.GetString() ?? msg;
-            throw new LicenseException(msg);
+            var msg = "Server error (HTTP " + httpStatus + ").";
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String)
+                msg = m.GetString() ?? msg;
+            throw new LicenseException(msg, httpStatus);
         }
 
         return root;

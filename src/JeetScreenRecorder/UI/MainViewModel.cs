@@ -58,6 +58,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private int _tick;
     private string? _lastLicStatus;       // detects license state changes (trial ended, license activated ...)
     private bool _licPromptShown;         // the Buy License window opens by itself only once per expiry
+    private bool _lastCheckFinished;      // detects the end of the first startup license check
     private string _licNotice = "";       // the expiry message we put in the banner (so we can remove it again)
     private double _micLevel, _sysLevel;
     private WindowInfo? _selectedWindow;
@@ -468,30 +469,53 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void CheckLicenseTransition()
     {
         var st = _license.Status;
-        if (st == _lastLicStatus) return;
-        _lastLicStatus = st;
-        Refresh();   // re-evaluates StartCommand (CanRecord) and the badge
-
-        if (st is LicenseStatus.TrialExpired or LicenseStatus.Expired)
+        var finished = _license.CheckFinished;
+        var changed = st != _lastLicStatus || finished != _lastCheckFinished;
+        if (changed)
         {
-            _licNotice = st == LicenseStatus.TrialExpired
-                ? "Your free trial has ended. Please buy a license to continue screen recording."
-                : "Your license has expired. Please buy or renew a license to continue screen recording.";
-            Message = _licNotice;
+            _lastLicStatus = st;
+            _lastCheckFinished = finished;
+            Refresh();   // re-evaluates StartCommand (CanRecord) and the badge
+        }
 
-            if (!_licPromptShown && _rec.State == RecordingState.Idle)
+        var notice = BuildLicenseNotice(st, finished);
+        if (notice.Length > 0)
+        {
+            // Keep the banner on screen for as long as recording is locked: put it back whenever the
+            // banner is empty (other code may clear it) or still shows our previous license notice.
+            if (string.IsNullOrEmpty(Message) || Message == _licNotice)
+            {
+                if (Message != notice) Message = notice;
+            }
+            _licNotice = notice;
+
+            // Buy License window opens by itself once, when the trial/license has run out.
+            if (changed && st is LicenseStatus.TrialExpired or LicenseStatus.Expired or LicenseStatus.Disabled &&
+                !_licPromptShown && _rec.State == RecordingState.Idle)
             {
                 _licPromptShown = true;
                 Application.Current.Dispatcher.BeginInvoke(new Action(() => OpenLicenseWindow()));
             }
         }
-        else
+        else if (changed)
         {
             if (_licNotice.Length > 0 && Message == _licNotice) Message = "";
             _licNotice = "";
             if (st is LicenseStatus.Licensed or LicenseStatus.TrialActive) _licPromptShown = false;
         }
     }
+
+    /// <summary>The banner text for states in which recording is locked (empty when recording is allowed).</summary>
+    private static string BuildLicenseNotice(string st, bool checkFinished) => st switch
+    {
+        LicenseStatus.TrialExpired => "Your free trial has ended. Please buy a license to continue screen recording.",
+        LicenseStatus.Expired      => "Your license has expired. Please buy or renew a license to continue screen recording.",
+        LicenseStatus.Disabled     => "This license has been disabled. Please contact support.",
+        LicenseStatus.NoInternet   => "Could not reach the license server. Connect to the internet and restart the app to continue.",
+        LicenseStatus.Unknown when checkFinished
+                                   => "Your license could not be verified. Click “License” to activate a key or buy one.",
+        _                          => "",
+    };
 
     /// <summary>Text of the header button: "Buy License" once the trial/license has run out.</summary>
     public string LicenseButtonText => _license.IsExpired ? "🛒 Buy License" : "🔑 License";

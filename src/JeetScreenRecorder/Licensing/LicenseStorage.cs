@@ -86,6 +86,8 @@ internal sealed class LicenseCache
     public string? ExpiresOn       { get; set; }  // "YYYY-MM-DD" or null for trial
     public string? LicenseType     { get; set; }  // "paid" | "complimentary" | null for trial
     public int     DaysRemaining   { get; set; }
+    /// <summary>Last refusal/notice text from the server (e.g. why the trial was blocked).</summary>
+    public string? ServerMessage   { get; set; }
 
     // --- trial fields ---
     public bool    TrialActive       { get; set; }
