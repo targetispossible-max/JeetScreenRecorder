@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Jeet Screen Recorder – License"
-        Width="500" Height="520" ResizeMode="NoResize"
+        Width="500" Height="640" ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner"
         FontFamily="Segoe UI"
         Icon="pack://application:,,,/Assets/JeetScreenRecorder.ico">
