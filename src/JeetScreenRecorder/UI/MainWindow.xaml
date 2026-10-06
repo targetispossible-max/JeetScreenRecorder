@@ -57,7 +57,7 @@
                                    FontSize="12" FontWeight="SemiBold"/>
                     </Border>
                     <!-- License Button -->
-                    <Button Content="🔑 License" Command="{Binding LicenseCommand}"
+                    <Button Content="{Binding LicenseButtonText}" Command="{Binding LicenseCommand}"
                             Style="{StaticResource SmallButton}" VerticalAlignment="Center"
                             ToolTip="Manage your license"/>
                 </StackPanel>
