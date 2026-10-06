@@ -159,7 +159,7 @@ public sealed class LicenseService
             _cache.TrialActive        = status == "trial_active";
             _cache.TrialDaysRemaining = payload.TryGetValue("days_remaining", out var dr) ? dr.GetInt32() : 0;
             _cache.LastVerifiedUtc    = DateTimeOffset.UtcNow;
-            _cache.LastServerTimeUtc  = ExtractServerTime(resp);
+            _cache.LastServerTimeUtc  = ExtractServerTime(payload);
             LicenseStorage.Save(_cache);
         }
         catch (LicenseException ex)
@@ -303,7 +303,11 @@ public sealed class LicenseService
             // Server returns reference, access_token, checkout_url (Razorpay) or upi details
             var reference   = TryStr(resp, "reference")    ?? TryStr(resp, "order_id") ?? "";
             var accessToken = TryStr(resp, "access_token") ?? "";
-            var url         = TryStr(resp, "checkout_url") ?? TryStr(resp, "upi_url") ?? "";
+            // Razorpay -> "checkout_url"; UPI -> nested "upi": { "page_url": ... }
+            var url         = TryStr(resp, "checkout_url") ?? "";
+            if (string.IsNullOrEmpty(url) &&
+                resp.TryGetProperty("upi", out var upi) && upi.ValueKind == JsonValueKind.Object)
+                url = TryStr(upi, "page_url") ?? "";
 
             if (string.IsNullOrEmpty(url))
                 return (false, "Server did not return a checkout URL.", null, null);
@@ -407,7 +411,7 @@ public sealed class LicenseService
             nonce,
             devId);
 
-        var status = payload["status"].GetString() ?? "";
+        var status = MapServerStatus(payload["status"].GetString() ?? "");
         _cache.Status          = status;
         _cache.ActivationToken = TryStrFromPayload(payload, "activation_token") ?? _cache.ActivationToken;
         _cache.ExpiresOn       = TryStrFromPayload(payload, "expires_on");
@@ -416,10 +420,25 @@ public sealed class LicenseService
         _cache.SignedBlob      = signedEl.GetString();
         _cache.BlobSig         = sigEl.GetString();
         _cache.LastVerifiedUtc  = DateTimeOffset.UtcNow;
-        _cache.LastServerTimeUtc = ExtractServerTime(resp);
+        _cache.LastServerTimeUtc = ExtractServerTime(payload);
 
         LicenseStorage.Save(_cache);
     }
+
+    /// <summary>
+    /// The server names license states active / expired / disabled / not_activated / deactivated;
+    /// the app uses its own LicenseStatus constants. Without this mapping a successful
+    /// activation ("active") would never be recognised as Licensed.
+    /// </summary>
+    private static string MapServerStatus(string serverStatus) => serverStatus switch
+    {
+        "active"        => LicenseStatus.Licensed,
+        "expired"       => LicenseStatus.Expired,
+        "disabled"      => LicenseStatus.Disabled,
+        "trial_active"  => LicenseStatus.TrialActive,
+        "trial_expired" => LicenseStatus.TrialExpired,
+        _               => LicenseStatus.Unknown,   // not_activated, deactivated, anything new
+    };
 
     private static string NewNonce() =>
         Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
@@ -430,9 +449,11 @@ public sealed class LicenseService
     private static string? TryStrFromPayload(Dictionary<string, JsonElement> d, string key) =>
         d.TryGetValue(key, out var v) ? v.GetString() : null;
 
-    private static DateTimeOffset ExtractServerTime(JsonElement resp)
+    // server_time lives inside the SIGNED payload (the plain top-level fields carry no time).
+    private static DateTimeOffset ExtractServerTime(Dictionary<string, JsonElement> payload)
     {
-        if (resp.TryGetProperty("server_time", out var st) &&
+        if (payload.TryGetValue("server_time", out var st) &&
+            st.ValueKind == JsonValueKind.String &&
             DateTimeOffset.TryParse(st.GetString(), out var dto))
             return dto;
         return DateTimeOffset.UtcNow;
