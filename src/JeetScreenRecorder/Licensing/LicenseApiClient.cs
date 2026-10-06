@@ -12,10 +12,8 @@ namespace JeetScreenRecorder.Licensing;
 /// </summary>
 internal sealed class LicenseApiClient : IDisposable
 {
-    // -----------------------------------------------------------------------
-    // REPLACE with your actual Hostinger subdomain after deploying the server.
-    // -----------------------------------------------------------------------
-    public const string ServerBase = "https://license.YOURDOMAIN.com";
+    // License server base URL (no trailing slash, no /admin).
+    public const string ServerBase = "https://adm.jsrecorder.com";
 
     // App version reported to the server (used for admin info only, not gating)
     public static string AppVersion => "0.2.0";
