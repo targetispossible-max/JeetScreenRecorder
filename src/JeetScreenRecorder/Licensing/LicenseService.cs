@@ -57,6 +57,8 @@ public sealed class LicenseService
         {
             if (_cache.Status == LicenseStatus.Licensed)
                 await HeartbeatAsync(CancellationToken.None);
+            else if (_cache.Status == LicenseStatus.TrialActive)
+                await RegisterOrVerifyTrialAsync(CancellationToken.None);   // keeps trial days / extensions in sync
         };
         _heartbeatTimer.Start();
     }
@@ -66,32 +68,48 @@ public sealed class LicenseService
     // -----------------------------------------------------------------------
 
     /// <summary>Current license status string (LicenseStatus constants).</summary>
-    public string Status => _cache.Status;
+    public string Status => EffectiveStatus;
+
+    /// <summary>
+    /// The cached status, except that an active trial turns into "trial expired" the moment its end time
+    /// passes - even while the app is open or offline - so recording locks exactly when the trial ends.
+    /// </summary>
+    private string EffectiveStatus =>
+        _cache.Status == LicenseStatus.TrialActive &&
+        _cache.TrialExpiresUtc != DateTimeOffset.MinValue &&
+        DateTimeOffset.UtcNow >= _cache.TrialExpiresUtc
+            ? LicenseStatus.TrialExpired
+            : _cache.Status;
 
     /// <summary>True if the user may press Start Recording.</summary>
     public bool CanRecord =>
-        _cache.Status == LicenseStatus.Licensed ||
-        _cache.Status == LicenseStatus.TrialActive ||
-        _cache.Status == LicenseStatus.Offline;
+        EffectiveStatus == LicenseStatus.Licensed ||
+        EffectiveStatus == LicenseStatus.TrialActive ||
+        EffectiveStatus == LicenseStatus.Offline;
 
-    public bool IsLicensed  => _cache.Status == LicenseStatus.Licensed;
-    public bool IsTrialActive => _cache.Status == LicenseStatus.TrialActive;
-    public bool IsExpired   => _cache.Status is LicenseStatus.Expired or LicenseStatus.TrialExpired;
+    public bool IsLicensed  => EffectiveStatus == LicenseStatus.Licensed;
+    public bool IsTrialActive => EffectiveStatus == LicenseStatus.TrialActive;
+    public bool IsExpired   => EffectiveStatus is LicenseStatus.Expired or LicenseStatus.TrialExpired;
 
     public string? ExpiresOn      => _cache.ExpiresOn;
     public string? LicenseType    => _cache.LicenseType;
     public int     DaysRemaining  => _cache.DaysRemaining;
-    public int     TrialDaysLeft  => _cache.TrialDaysRemaining;
+
+    /// <summary>Whole days left in the trial (counts down live from the server's trial end time).</summary>
+    public int TrialDaysLeft =>
+        _cache.TrialExpiresUtc == DateTimeOffset.MinValue
+            ? _cache.TrialDaysRemaining
+            : Math.Max(0, (int)Math.Ceiling((_cache.TrialExpiresUtc - DateTimeOffset.UtcNow).TotalDays));
 
     // Friendly one-line summary for the UI badge
-    public string StatusLabel => _cache.Status switch
+    public string StatusLabel => EffectiveStatus switch
     {
         LicenseStatus.Licensed     => _cache.LicenseType == "complimentary"
                                         ? $"✔ Complimentary  •  Expires {FormatDate(_cache.ExpiresOn)}"
                                         : $"✔ Licensed  •  Expires {FormatDate(_cache.ExpiresOn)}",
-        LicenseStatus.TrialActive  => $"⏳ Trial  •  {_cache.TrialDaysRemaining} day(s) left",
-        LicenseStatus.TrialExpired => "Trial Expired",
-        LicenseStatus.Expired      => "License Expired",
+        LicenseStatus.TrialActive  => $"⏳ Free Trial  •  {TrialDaysLeft} day(s) left",
+        LicenseStatus.TrialExpired => "Free trial ended – Buy License",
+        LicenseStatus.Expired      => "License expired – Buy License",
         LicenseStatus.Disabled     => "License Disabled",
         LicenseStatus.Offline      => $"✔ Licensed (offline)  •  Expires {FormatDate(_cache.ExpiresOn)}",
         LicenseStatus.NoInternet   => "No internet connection",
@@ -158,6 +176,11 @@ public sealed class LicenseService
             _cache.Status             = status;
             _cache.TrialActive        = status == "trial_active";
             _cache.TrialDaysRemaining = payload.TryGetValue("days_remaining", out var dr) ? dr.GetInt32() : 0;
+            _cache.TrialExpiresUtc    = payload.TryGetValue("trial_expires_at", out var te) &&
+                                        te.ValueKind == JsonValueKind.String &&
+                                        DateTimeOffset.TryParse(te.GetString(), out var teDto)
+                                            ? teDto
+                                            : DateTimeOffset.MinValue;
             _cache.LastVerifiedUtc    = DateTimeOffset.UtcNow;
             _cache.LastServerTimeUtc  = ExtractServerTime(payload);
             LicenseStorage.Save(_cache);
@@ -166,13 +189,14 @@ public sealed class LicenseService
         {
             AppLogger.Warn("Trial register failed: " + ex.Message);
             // If we already had a cached trial status, keep it
-            if (_cache.Status == LicenseStatus.TrialActive) return;
+            if (_cache.Status is LicenseStatus.TrialActive or LicenseStatus.TrialExpired) return;
             _cache.Status = LicenseStatus.NoInternet;
             // Do NOT save - let next launch retry
         }
         catch (Exception ex)
         {
             AppLogger.Error("Trial register unexpected error", ex);
+            if (_cache.Status is LicenseStatus.TrialActive or LicenseStatus.TrialExpired) return;
             _cache.Status = LicenseStatus.NoInternet;
         }
     }
