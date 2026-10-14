@@ -19,6 +19,9 @@ public sealed record EncoderOptions
     public int OutputWidth { get; init; }       // 0 = original
     public int OutputHeight { get; init; }      // 0 = original
     public int BitrateKbps { get; init; } = 12000;
+    /// <summary>Constant-quality value (lower = better, 0 = off: plain bitrate mode). Like OBS "CQP/CRF": the encoder spends
+    /// bits only where the picture needs them. <see cref="BitrateKbps"/> then only limits the peaks.</summary>
+    public int Cq { get; init; }
     public bool DrawMouse { get; init; } = true;
     public int AudioSampleRate { get; init; } = 48000;
     public int AudioBitrateKbps { get; init; } = 192;

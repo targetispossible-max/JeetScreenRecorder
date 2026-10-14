@@ -46,6 +46,7 @@ public sealed class RecordingService : IRecordingService
     private Timer? _diskTimer;
     private bool _diskWarned;
     private string _stopReason = "";
+    private readonly Stopwatch _segWall = new();   // real time since the first video frame of the current segment
 
     public RecordingService(ISettingsService settings, IStorageService storage, IEncoderDetector detector,
         IMonitorService monitors, IAudioCaptureService audio, Func<IVideoEncoder> encoderFactory)
@@ -178,6 +179,7 @@ public sealed class RecordingService : IRecordingService
                 // The audio file is connected to the mixer only when the first video frame has been written
                 // (see OnStats), so that audio and video start at the same moment.
                 lock (_attachLock) { _curIndex = index; _audioFile = file; _audioPending = file != null; _audioDelay = 0; }
+                _segWall.Reset();
                 await encoder.StartAsync(_opts, path);
                 _enc = encoder;
                 _segments.Add(path);
@@ -279,6 +281,7 @@ public sealed class RecordingService : IRecordingService
     {
         _cur = e;
         Stats = new RecordingStats(e.Fps, _finishedBytes + e.SizeBytes, _droppedBase + e.DroppedFrames, _resolution);
+        if (e.Frames > 0 && !_segWall.IsRunning) _segWall.Restart();
         if (_audioPending && e.Frames > 0) AttachAudio(e.OutTimeSeconds);
     }
 
@@ -320,8 +323,11 @@ public sealed class RecordingService : IRecordingService
 
         var enc = _enc;
         _enc = null;
+        double wall = _segWall.IsRunning ? _segWall.Elapsed.TotalSeconds : 0;   // measured before ffmpeg is told to stop
+        _segWall.Reset();
         if (enc != null)
         {
+            if (wall > 0) SegmentMuxer.WriteWall(_partsDir, index, wall);
             await enc.StopAsync();
             await enc.DisposeAsync();
             _droppedBase += _cur.DroppedFrames;
@@ -337,7 +343,7 @@ public sealed class RecordingService : IRecordingService
         if (enc == null || _segments.Count == 0) return;
 
         // Join this segment's video and audio into one file.
-        var joined = await SegmentMuxer.MuxAsync(_partsDir, index, delay, _opts.AudioSampleRate, _opts.AudioBitrateKbps, _useAudio);
+        var joined = await SegmentMuxer.MuxAsync(_partsDir, index, delay, _opts.AudioSampleRate, _opts.AudioBitrateKbps, _useAudio, wall);
         _segments[^1] = joined;
         try { _finishedBytes += new FileInfo(joined).Length; } catch { }
 
@@ -422,6 +428,8 @@ public sealed class RecordingService : IRecordingService
         {
             EncoderId = enc.Id,
             BitrateKbps = kbps,
+            // Constant quality (like OBS CQP/CRF) unless the user typed a fixed bitrate.
+            Cq = s.BitrateKbps > 0 || !s.ConstantQuality ? 0 : FfmpegArgsBuilder.CqFor(s.Quality),
             AudioSampleRate = s.AudioSampleRate,
             AudioBitrateKbps = s.AudioBitrateKbps,
             BasicEncoderArgs = enc.BasicOnly,

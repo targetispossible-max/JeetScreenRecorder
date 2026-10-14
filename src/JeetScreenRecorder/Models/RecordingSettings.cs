@@ -28,11 +28,12 @@ public sealed class RecordingSettings
     [System.Text.Json.Serialization.JsonIgnore] public int WindowHeight { get; set; }
     public int Width { get; set; } = 0;   // 0 = original
     public int Height { get; set; } = 0;  // 0 = original
-    public int Fps { get; set; } = 60;
-    public QualityPreset Quality { get; set; } = QualityPreset.High;
+    public int Fps { get; set; } = 30;
+    public QualityPreset Quality { get; set; } = QualityPreset.VeryHigh;
     public VideoCodec Codec { get; set; } = VideoCodec.H264;
     public string Encoder { get; set; } = "auto";
     public int BitrateKbps { get; set; } = 0; // 0 = auto
+    public bool ConstantQuality { get; set; } = true; // true = quality-based encoding (like OBS CQP/CRF); false = bitrate-based
 
     // Audio
     public bool MicEnabled { get; set; } = true;
@@ -42,7 +43,7 @@ public sealed class RecordingSettings
     public double SystemVolume { get; set; } = 0.8;
     public int AudioSampleRate { get; set; } = 48000;
     public int AudioChannels { get; set; } = 2;
-    public int AudioBitrateKbps { get; set; } = 256;
+    public int AudioBitrateKbps { get; set; } = 320;
     public int AudioSyncOffsetMs { get; set; } = 0;   // fine-tune: + makes audio later, - earlier (milliseconds)
 
     // Webcam (picture-in-picture over the screen recording)

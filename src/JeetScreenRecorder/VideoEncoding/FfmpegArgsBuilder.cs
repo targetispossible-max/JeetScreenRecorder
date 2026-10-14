@@ -20,6 +20,17 @@ public static class FfmpegArgsBuilder
         _ => 1.0
     };
 
+    /// <summary>Constant-quality value per quality preset (OBS guides use 16-23 for good local recordings).</summary>
+    public static int CqFor(QualityPreset q) => q switch
+    {
+        QualityPreset.Low => 28,
+        QualityPreset.Medium => 24,
+        QualityPreset.High => 21,
+        QualityPreset.VeryHigh => 18,
+        QualityPreset.Lossless => 14,
+        _ => 21
+    };
+
     /// <summary>Scale only when the target is smaller than the source (never upscale).</summary>
     public static bool NeedsScale(EncoderOptions o) =>
         o.OutputWidth > 0 && o.OutputHeight > 0 &&
@@ -105,11 +116,12 @@ public static class FfmpegArgsBuilder
     /// <summary>
     /// Joins one video-only segment with its raw PCM audio (s16le stereo) into one A/V segment. The video is copied (no re-encode).
     /// <paramref name="audioDelaySeconds"/> pads silence at the start so audio and video line up; <c>apad</c> + <c>-shortest</c>
-    /// make the audio exactly as long as the video. Pass pcmPath = null to add a silent track instead
+    /// make the audio exactly as long as the video. <paramref name="videoStretch"/> &gt; 1 stretches the video timeline
+    /// (real recording time / video length). Pass pcmPath = null to add a silent track instead
     /// (so every segment has the same streams and can be joined later).
     /// </summary>
     public static string BuildMux(string videoPath, string? pcmPath, double audioDelaySeconds,
-        int sampleRate, int audioKbps, string outputPath)
+        int sampleRate, int audioKbps, string outputPath, double videoStretch = 1.0)
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         var sb = new StringBuilder("-hide_banner -y -loglevel error ");
@@ -124,7 +136,15 @@ public static class FfmpegArgsBuilder
         {
             sb.Append($"-f lavfi -i \"anullsrc=r={sampleRate}:cl=stereo\" ");
         }
-        sb.Append($"-map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a {audioKbps}k -shortest \"{outputPath}\"");
+        sb.Append($"-map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a {audioKbps}k -shortest ");
+        // Video timestamps were "compressed" by a capture that could not keep real-time speed: stretch them back
+        // to real time (no re-encode) so the video is as long as the time that was really recorded.
+        if (videoStretch > 1.0005)
+        {
+            var r = videoStretch.ToString("0.######", inv);
+            sb.Append($"-bsf:v \"setts=pts=PTS*{r}:dts=DTS*{r}\" ");
+        }
+        sb.Append($"\"{outputPath}\"");
         return sb.ToString();
     }
 
@@ -202,23 +222,31 @@ public static class FfmpegArgsBuilder
         int k = o.BitrateKbps, max = k * 3 / 2, buf = k * 2;
         var id = o.EncoderId;
         bool best = !o.BasicEncoderArgs;   // "best" adds optional quality switches; the app falls back to basic if a GPU rejects them
+        // Constant quality is used only together with the "best" switches: if a GPU rejects it, the app retries in
+        // BasicEncoderArgs mode, which uses the plain bitrate settings below.
+        int cq = best ? o.Cq : 0;
+        if (cq > 0) max = k * 2;           // CQ lets peaks go higher than the average bitrate would
         if (IsNvenc(id))
         {
-            sb.Append($"-c:v {id} -preset p5 -rc vbr -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
+            if (cq > 0) sb.Append($"-c:v {id} -preset p5 -rc vbr -cq {cq} -b:v 0 -maxrate {max}k -bufsize {buf}k ");
+            else sb.Append($"-c:v {id} -preset p5 -rc vbr -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
             if (best) sb.Append("-tune hq -spatial-aq 1 -rc-lookahead 16 ");
         }
         else if (IsQsv(id))
         {
-            sb.Append($"-c:v {id} -preset {(best ? "slow" : "medium")} -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
+            if (cq > 0) sb.Append($"-c:v {id} -preset slow -global_quality {cq} -maxrate {max}k -bufsize {buf}k ");
+            else sb.Append($"-c:v {id} -preset {(best ? "slow" : "medium")} -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
         }
         else if (IsAmf(id))
         {
-            sb.Append($"-c:v {id} -quality {(best ? "quality" : "balanced")} -rc vbr_peak -b:v {k}k -maxrate {max}k ");
+            if (cq > 0) sb.Append($"-c:v {id} -quality quality -rc cqp -qp_i {cq} -qp_p {cq + 2} -qp_b {cq + 4} ");
+            else sb.Append($"-c:v {id} -quality {(best ? "quality" : "balanced")} -rc vbr_peak -b:v {k}k -maxrate {max}k ");
         }
         else
         {
             var preset = string.IsNullOrWhiteSpace(o.X264Preset) ? "veryfast" : o.X264Preset;
-            sb.Append($"-c:v libx264 -preset {preset} -profile:v high -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
+            if (cq > 0) sb.Append($"-c:v libx264 -preset {preset} -profile:v high -crf {cq} -maxrate {max}k -bufsize {buf}k ");
+            else sb.Append($"-c:v libx264 -preset {preset} -profile:v high -b:v {k}k -maxrate {max}k -bufsize {buf}k ");
         }
     }
 }

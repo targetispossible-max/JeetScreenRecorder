@@ -31,7 +31,7 @@ public static class RecordingRecovery
         {
             if (joined) { files.Add(path); continue; }
             var (delay, rate) = SegmentMuxer.ReadInfo(partsDir, n);
-            files.Add(await SegmentMuxer.MuxAsync(partsDir, n, delay, rate, 192, hasAudio));
+            files.Add(await SegmentMuxer.MuxAsync(partsDir, n, delay, rate, 192, hasAudio, SegmentMuxer.ReadWall(partsDir, n)));
         }
 
         var name = Path.GetFileName(partsDir).TrimStart('.');

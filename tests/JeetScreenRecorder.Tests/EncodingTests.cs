@@ -215,6 +215,30 @@ public class EncodingTests
         Assert.Contains("-stats_period 0.1", a);
     }
 
+    [Theory]
+    [InlineData("libx264", "-crf 18")]
+    [InlineData("h264_nvenc", "-cq 18 -b:v 0")]
+    [InlineData("h264_qsv", "-global_quality 18")]
+    [InlineData("h264_amf", "-rc cqp -qp_i 18")]
+    public void ConstantQuality_UsesQualityValue_AndBasicModeFallsBackToBitrate(string enc, string expected)
+    {
+        var o = Opts(enc) with { Cq = 18 };
+        Assert.Contains(expected, FfmpegArgsBuilder.Build(o, "out.mkv"));
+        var basic = FfmpegArgsBuilder.Build(o with { BasicEncoderArgs = true }, "out.mkv");
+        Assert.Contains("-b:v 12000k", basic);
+        Assert.DoesNotContain("-crf", basic);
+        Assert.DoesNotContain("-global_quality", basic);
+    }
+
+    [Fact]
+    public void Mux_Stretch_AddsTimestampFilter_OnlyWhenNeeded()
+    {
+        var a = FfmpegArgsBuilder.BuildMux("v.mkv", "a.pcm", 0, 48000, 192, "o.mkv", 1.5);
+        Assert.Contains("-bsf:v \"setts=pts=PTS*1.5:dts=DTS*1.5\"", a);
+        Assert.EndsWith("\"o.mkv\"", a);
+        Assert.DoesNotContain("setts", FfmpegArgsBuilder.BuildMux("v.mkv", "a.pcm", 0, 48000, 192, "o.mkv"));
+    }
+
     [Fact]
     public void Mux_WithAudio_CopiesVideo_PadsStartAndEnd()
     {

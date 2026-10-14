@@ -17,7 +17,6 @@ using JeetScreenRecorder.Storage;
 using JeetScreenRecorder.Utils;
 using JeetScreenRecorder.VideoEncoding;
 using JeetScreenRecorder.Webcam;
-using JeetScreenRecorder.Licensing;
 
 namespace JeetScreenRecorder.UI;
 
@@ -47,7 +46,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly IWindowService _windows;
     private readonly IStorageService _storage;
     private readonly IWebcamService _webcam;
-    private readonly LicenseService _license;
     private readonly RecordingSettings _s;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(100) };
     private string _message = "";
@@ -56,10 +54,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private int _countdown;
     private bool _starting;
     private int _tick;
-    private string? _lastLicStatus;       // detects license state changes (trial ended, license activated ...)
-    private bool _licPromptShown;         // the Buy License window opens by itself only once per expiry
-    private bool _lastCheckFinished;      // detects the end of the first startup license check
-    private string _licNotice = "";       // the expiry message we put in the banner (so we can remove it again)
     private double _micLevel, _sysLevel;
     private WindowInfo? _selectedWindow;
     private ImageSource? _cameraPreview;
@@ -77,7 +71,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand TestAudioCommand { get; }
     public RelayCommand DetectCamerasCommand { get; }
     public RelayCommand TestCameraCommand { get; }
-    public RelayCommand LicenseCommand { get; }
 
     public int[] FpsOptions { get; } = { 24, 30, 48, 50, 60 };
     public string[] ResolutionOptions { get; } =
@@ -97,8 +90,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public MainViewModel(IRecordingService rec, ISettingsService settings, IAudioCaptureService audio,
         IScreenshotService shot, IMonitorService monitors, IAnnotationService annotation,
-        IRegionSelector regions, IWindowService windows, IStorageService storage, IWebcamService webcam,
-        LicenseService license)
+        IRegionSelector regions, IWindowService windows, IStorageService storage, IWebcamService webcam)
     {
         _rec = rec;
         _settings = settings;
@@ -109,14 +101,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _windows = windows;
         _storage = storage;
         _webcam = webcam;
-        _license = license;
         _s = settings.Current;
         MonitorOptions = monitors.GetMonitors();
         MicOptions = audio.GetMicrophones();
         _audio.SetGains(_s.MicVolume, _s.SystemVolume);
 
         StartCommand = new RelayCommand(() => Run(StartWithCountdownAsync),
-            () => _rec.State == RecordingState.Idle && _countdown == 0 && _license.CanRecord);
+            () => _rec.State == RecordingState.Idle && _countdown == 0);
         PauseResumeCommand = new RelayCommand(
             () => Run(() => _rec.State == RecordingState.Paused ? _rec.ResumeAsync() : _rec.PauseAsync()),
             () => _rec.State is RecordingState.Recording or RecordingState.Paused);
@@ -131,7 +122,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         TestAudioCommand = new RelayCommand(ToggleTestAudio, () => _rec.State == RecordingState.Idle);
         DetectCamerasCommand = new RelayCommand(() => Run(DetectCamerasAsync), () => _rec.State == RecordingState.Idle);
         TestCameraCommand = new RelayCommand(() => Run(TestCameraAsync), () => _rec.State == RecordingState.Idle);
-        LicenseCommand = new RelayCommand(() => OpenLicenseWindow());
 
         _rec.StateChanged += (_, _) => Refresh();
         _rec.Notice += (_, msg) => Application.Current.Dispatcher.Invoke(() => Message = msg);
@@ -325,10 +315,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(BarText));
         OnPropertyChanged(nameof(StatsText));
         OnPropertyChanged(nameof(EncoderText));
-        OnPropertyChanged(nameof(LicenseStatusLabel));
-        OnPropertyChanged(nameof(LicenseBadgeBrush));
-        OnPropertyChanged(nameof(LicenseButtonText));
-        CheckLicenseTransition();
         if (++_tick % 20 == 0) UpdateEstimate();
     }
 
@@ -447,90 +433,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (c.CanExecute(null)) c.Execute(null);
     }
-
-    // ---- License gating ----
-    private void OpenLicenseWindow()
-    {
-        var win = new JeetScreenRecorder.Licensing.LicenseWindow(_license)
-        {
-            Owner = Application.Current.MainWindow
-        };
-        win.ShowDialog();
-        // Refresh recording button (license state may have changed)
-        Refresh();
-    }
-
-    /// <summary>
-    /// Runs on every timer tick. When the license state changes (the background check finished, the trial
-    /// ended while the app was open, a license was just bought/activated) it refreshes the Start button, and
-    /// when the trial/license has run out it shows an English message and opens the Buy License window once.
-    /// Recording that is already running is never interrupted - the lock applies to the next start.
-    /// </summary>
-    private void CheckLicenseTransition()
-    {
-        var st = _license.Status;
-        var finished = _license.CheckFinished;
-        var changed = st != _lastLicStatus || finished != _lastCheckFinished;
-        if (changed)
-        {
-            _lastLicStatus = st;
-            _lastCheckFinished = finished;
-            Refresh();   // re-evaluates StartCommand (CanRecord) and the badge
-        }
-
-        var notice = BuildLicenseNotice(st, finished);
-        if (notice.Length > 0)
-        {
-            // Keep the banner on screen for as long as recording is locked: put it back whenever the
-            // banner is empty (other code may clear it) or still shows our previous license notice.
-            if (string.IsNullOrEmpty(Message) || Message == _licNotice)
-            {
-                if (Message != notice) Message = notice;
-            }
-            _licNotice = notice;
-
-            // Buy License window opens by itself once, when the trial/license has run out.
-            if (changed && st is LicenseStatus.TrialExpired or LicenseStatus.Expired or LicenseStatus.Disabled &&
-                !_licPromptShown && _rec.State == RecordingState.Idle)
-            {
-                _licPromptShown = true;
-                Application.Current.Dispatcher.BeginInvoke(new Action(() => OpenLicenseWindow()));
-            }
-        }
-        else if (changed)
-        {
-            if (_licNotice.Length > 0 && Message == _licNotice) Message = "";
-            _licNotice = "";
-            if (st is LicenseStatus.Licensed or LicenseStatus.TrialActive) _licPromptShown = false;
-        }
-    }
-
-    /// <summary>The banner text for states in which recording is locked (empty when recording is allowed).</summary>
-    private static string BuildLicenseNotice(string st, bool checkFinished) => st switch
-    {
-        LicenseStatus.TrialExpired => "Your free trial has ended. Please buy a license to continue screen recording.",
-        LicenseStatus.Expired      => "Your license has expired. Please buy or renew a license to continue screen recording.",
-        LicenseStatus.Disabled     => "This license has been disabled. Please contact support.",
-        LicenseStatus.NoInternet   => "Could not reach the license server. Connect to the internet and restart the app to continue.",
-        LicenseStatus.Unknown when checkFinished
-                                   => "Your license could not be verified. Click “License” to activate a key or buy one.",
-        _                          => "",
-    };
-
-    /// <summary>Text of the header button: "Buy License" once the trial/license has run out.</summary>
-    public string LicenseButtonText => _license.IsExpired ? "🛒 Buy License" : "🔑 License";
-
-    /// <summary>Human-readable license status for the badge in the header.</summary>
-    public string LicenseStatusLabel => _license.StatusLabel;
-
-    /// <summary>Brush for the license badge background color.</summary>
-    public System.Windows.Media.SolidColorBrush LicenseBadgeBrush => _license.Status switch
-    {
-        LicenseStatus.Licensed    => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1A, 0x3A, 0x2A)),
-        LicenseStatus.Offline     => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1A, 0x3A, 0x2A)),
-        LicenseStatus.TrialActive => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2C, 0x28, 0x00)),
-        _                         => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3A, 0x0E, 0x14)),
-    };
 
     public bool IsBusy => _rec.State != RecordingState.Idle;
 
@@ -942,9 +844,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanEditSettings));
         OnPropertyChanged(nameof(StatsText));
         OnPropertyChanged(nameof(EncoderText));
-        OnPropertyChanged(nameof(LicenseStatusLabel));
-        OnPropertyChanged(nameof(LicenseBadgeBrush));
-        OnPropertyChanged(nameof(LicenseButtonText));
         StartCommand.Raise();
         PauseResumeCommand.Raise();
         StopCommand.Raise();
@@ -953,7 +852,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         TestAudioCommand.Raise();
         DetectCamerasCommand.Raise();
         TestCameraCommand.Raise();
-        LicenseCommand.Raise();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
