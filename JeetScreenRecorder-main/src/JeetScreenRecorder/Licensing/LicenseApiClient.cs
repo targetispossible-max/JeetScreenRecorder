@@ -1,0 +1,206 @@
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+
+namespace JeetScreenRecorder.Licensing;
+
+/// <summary>
+/// Thin HTTP wrapper around the license server API.
+/// All amounts, dates and pricing come from the server; this class just
+/// serialises / deserialises and handles network errors.
+/// </summary>
+internal sealed class LicenseApiClient : IDisposable
+{
+    // License server base URL (no trailing slash, no /admin).
+    public const string ServerBase = "https://adm.jsrecorder.com";
+
+    // Where the "Buy License" buttons send people (our website; it has the Buy Now button).
+    public const string BuyPageUrl = "https://jsrecorder.com/pricing/";
+
+    // App version reported to the server (used for admin info only, not gating)
+    public static string AppVersion => "0.2.0";
+
+    // -----------------------------------------------------------------------
+
+    private static readonly HttpClient _http = new(new HttpClientHandler
+    {
+        AllowAutoRedirect = false,
+        UseProxy = false,
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(15),
+        // Browser-like headers: some web hosts' firewalls reject API calls that send no Accept header.
+        DefaultRequestHeaders =
+        {
+            { "User-Agent",      "JeetScreenRecorder/" + AppVersion + " (Windows)" },
+            { "Accept",          "application/json" },
+            { "Accept-Language", "en-US,en;q=0.9" },
+        }
+    };
+
+    // -----------------------------------------------------------------------  API calls
+
+    public async Task<JsonElement> TrialRegisterAsync(
+        string installationId, string deviceId, string nonce,
+        CancellationToken ct = default)
+    {
+        return await PostAsync("/api/trial/register", new
+        {
+            installation_id = installationId,
+            device_id       = deviceId,
+            app_version     = AppVersion,
+            nonce           = nonce,
+        }, ct);
+    }
+
+    public async Task<JsonElement> ActivateAsync(
+        string licenseKey, string installationId, string deviceId,
+        string deviceName, string nonce,
+        CancellationToken ct = default)
+    {
+        return await PostAsync("/api/license/activate", new
+        {
+            license_key     = licenseKey,
+            installation_id = installationId,
+            device_id       = deviceId,
+            device_name     = deviceName,
+            app_version     = AppVersion,
+            nonce           = nonce,
+        }, ct);
+    }
+
+    public async Task<JsonElement> ValidateAsync(
+        string activationToken, string deviceId, string nonce,
+        CancellationToken ct = default)
+    {
+        return await PostAsync("/api/license/validate", new
+        {
+            activation_token = activationToken,
+            device_id        = deviceId,
+            app_version      = AppVersion,
+            nonce            = nonce,
+        }, ct);
+    }
+
+    public async Task<JsonElement> HeartbeatAsync(
+        string activationToken, string deviceId, string nonce,
+        CancellationToken ct = default)
+    {
+        return await PostAsync("/api/license/heartbeat", new
+        {
+            activation_token = activationToken,
+            device_id        = deviceId,
+            app_version      = AppVersion,
+            nonce            = nonce,
+        }, ct);
+    }
+
+    public async Task<JsonElement> DeactivateAsync(
+        string activationToken, string deviceId, string nonce,
+        CancellationToken ct = default)
+    {
+        return await PostAsync("/api/license/deactivate", new
+        {
+            activation_token = activationToken,
+            device_id        = deviceId,
+            app_version      = AppVersion,
+            nonce            = nonce,
+        }, ct);
+    }
+
+    public async Task<JsonElement> ValidateCouponAsync(
+        string code, string? email,
+        CancellationToken ct = default)
+    {
+        return await PostAsync("/api/coupon/validate", new
+        {
+            code  = code,
+            email = email,
+        }, ct);
+    }
+
+    public async Task<JsonElement> CreatePaymentAsync(
+        string name, string email, string mobile, string method,
+        string? couponCode,
+        CancellationToken ct = default)
+    {
+        return await PostAsync("/api/payment/create", new
+        {
+            name         = name,
+            email        = email,
+            mobile       = mobile,
+            method       = method,
+            coupon_code  = couponCode,
+        }, ct);
+    }
+
+    public async Task<JsonElement> GetPaymentStatusAsync(
+        string reference, string accessToken,
+        CancellationToken ct = default)
+    {
+        return await PostAsync("/api/payment/status", new
+        {
+            reference    = reference,
+            access_token = accessToken,
+        }, ct);
+    }
+
+    // -----------------------------------------------------------------------  low-level
+
+    private static async Task<JsonElement> PostAsync(string path, object body, CancellationToken ct)
+    {
+        var json    = JsonSerializer.Serialize(body);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        HttpResponseMessage resp;
+        try
+        {
+            resp = await _http.PostAsync(ServerBase + path, content, ct);
+        }
+        catch (TaskCanceledException)   { throw new LicenseException("Connection timed out. Check your internet."); }
+        catch (HttpRequestException ex) { throw new LicenseException("Cannot reach license server: " + ex.Message); }
+
+        var text = await resp.Content.ReadAsStringAsync(ct);
+        var httpStatus = (int)resp.StatusCode;
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var snippet = text.Length > 400 ? text.Substring(0, 400) : text;
+            Utils.AppLogger.Warn($"License server {path} -> HTTP {httpStatus}: {snippet.Replace('\r', ' ').Replace('\n', ' ')}");
+        }
+
+        JsonElement root;
+        try   { root = JsonSerializer.Deserialize<JsonElement>(text); }
+        catch
+        {
+            if (!resp.IsSuccessStatusCode)
+                throw new LicenseException(
+                    "Server error (HTTP " + httpStatus + "). The server did not return a license answer - " +
+                    "the web host or firewall may be blocking the request.", httpStatus, isJsonReply: false);
+            throw new LicenseException("Server returned unexpected response.");
+        }
+
+        // surface server-level errors (non-200) as LicenseException (with the HTTP status)
+        if (!resp.IsSuccessStatusCode)
+        {
+            var msg = "Server error (HTTP " + httpStatus + ").";
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var key in new[] { "message", "error", "detail", "reason" })
+                {
+                    if (root.TryGetProperty(key, out var m) && m.ValueKind == JsonValueKind.String &&
+                        !string.IsNullOrWhiteSpace(m.GetString()))
+                    {
+                        msg = m.GetString()!;
+                        break;
+                    }
+                }
+            }
+            throw new LicenseException(msg, httpStatus, isJsonReply: true);
+        }
+
+        return root;
+    }
+
+    public void Dispose() { }   // _http is static / shared
+}
