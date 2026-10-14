@@ -129,7 +129,7 @@ public class CoreTests
     {
         var path = Path.Combine(Path.GetTempPath(), $"psr_{Guid.NewGuid():N}.json");
         File.WriteAllText(path, "{ not json");
-        try { Assert.Equal(60, new JsonSettingsService(path).Current.Fps); }
+        try { Assert.Equal(30, new JsonSettingsService(path).Current.Fps); }
         finally { File.Delete(path); }
     }
 }
