@@ -11,6 +11,7 @@ using JeetScreenRecorder.UI;
 using JeetScreenRecorder.VideoEncoding;
 using JeetScreenRecorder.Utils;
 using JeetScreenRecorder.Webcam;
+using JeetScreenRecorder.Licensing;
 
 namespace JeetScreenRecorder;
 
@@ -46,12 +47,17 @@ public partial class App : Application
         sc.AddSingleton<IEncoderDetector, EncoderDetector>();
         sc.AddTransient<IVideoEncoder, FfmpegSegmentEncoder>();
         sc.AddSingleton<Func<IVideoEncoder>>(p => () => p.GetRequiredService<IVideoEncoder>());
+        sc.AddSingleton<LicenseService>();
         sc.AddSingleton<IRecordingService, RecordingService>();
         sc.AddSingleton<MainViewModel>();
         sc.AddTransient<MainWindow>();
         Services = sc.BuildServiceProvider();
 
         AppLogger.Info("Application started");
+        // License / trial check runs in the background. Recording is never blocked: when no valid license is found
+        // after the free days, recordings simply get the Jeet watermark (see LicenseService.WatermarkRequired).
+        TrialPolicy.EnsureStarted();
+        _ = Services.GetRequiredService<LicenseService>().InitialiseAsync();
         Services.GetRequiredService<MainWindow>().Show();
     }
 }

@@ -91,6 +91,25 @@ public sealed class LicenseService
     public bool IsTrialActive => EffectiveStatus == LicenseStatus.TrialActive;
     public bool IsExpired   => EffectiveStatus is LicenseStatus.Expired or LicenseStatus.TrialExpired;
 
+    /// <summary>
+    /// True when recordings must carry the watermark: the free period is over (or the license ran out) and no valid
+    /// license is active. Nothing is blocked. While the server cannot be reached and nothing is known yet, the PC's own
+    /// first-run date (<see cref="TrialPolicy"/>) decides.
+    /// </summary>
+    public bool WatermarkRequired => EffectiveStatus switch
+    {
+        LicenseStatus.Licensed or LicenseStatus.Offline or LicenseStatus.TrialActive => false,
+        LicenseStatus.TrialExpired or LicenseStatus.Expired or LicenseStatus.Disabled => true,
+        _ => TrialPolicy.WatermarkRequired
+    };
+
+    /// <summary>Waits (up to <paramref name="timeoutMs"/>) for the first startup check, so a licensed user is not marked by mistake.</summary>
+    public async Task WaitForCheckAsync(int timeoutMs)
+    {
+        var until = Environment.TickCount64 + timeoutMs;
+        while (!CheckFinished && Environment.TickCount64 < until) await Task.Delay(100);
+    }
+
     /// <summary>True once the first startup check (success or failure) has finished.</summary>
     public bool CheckFinished { get; private set; }
 

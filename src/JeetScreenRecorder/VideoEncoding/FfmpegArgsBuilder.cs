@@ -41,6 +41,10 @@ public static class FfmpegArgsBuilder
         NeedsScale(o) ? (o.OutputWidth, o.OutputHeight) : (o.SourceWidth & ~1, o.SourceHeight & ~1);
 
     public static bool HasWebcam(EncoderOptions o) => !string.IsNullOrWhiteSpace(o.WebcamName);
+    public static bool HasWatermark(EncoderOptions o) => !string.IsNullOrWhiteSpace(o.WatermarkPath);
+
+    /// <summary>Watermark width: a medium-size mark, about 20 % of the video width (even number, at least 120 px).</summary>
+    public static int WatermarkWidthFor(int videoWidth) => Math.Max(120, (int)(videoWidth * 0.20)) & ~1;
 
     private static void AppendVideoInput(StringBuilder sb, EncoderOptions o, int fps, bool mouse)
     {
@@ -94,11 +98,13 @@ public static class FfmpegArgsBuilder
         // ---- inputs (all inputs must come before any output option) ----
         AppendVideoInput(sb, o, o.Fps, o.DrawMouse);
         if (cam) AppendWebcamInput(sb, o);
+        bool wm = HasWatermark(o);
+        if (wm) sb.Append($"-i \"{o.WatermarkPath!.Replace("\"", "")}\" ");
 
         // ---- video filters ----
-        if (cam)
+        if (cam || wm)
         {
-            sb.Append($"-filter_complex \"{WebcamGraph(o, gpuFrames)}\" -map \"[v]\" ");
+            sb.Append($"-filter_complex \"{OverlayGraph(o, gpuFrames, cam, wm)}\" -map \"[v]\" ");
         }
         else
         {
@@ -176,10 +182,9 @@ public static class FfmpegArgsBuilder
         return Math.Max(64, w) & ~1;
     }
 
-    private static string WebcamGraph(EncoderOptions o, bool fromGpuFrames)
+    private static string OverlayGraph(EncoderOptions o, bool fromGpuFrames, bool cam, bool wm)
     {
         var (w, _) = OutputSize(o);
-        int camW = WebcamWidthFor(w, o.WebcamPercent);
         int margin = Math.Max(12, w / 80);
 
         var bg = new List<string>();
@@ -189,20 +194,34 @@ public static class FfmpegArgsBuilder
             : "scale=trunc(iw/2)*2:trunc(ih/2)*2:out_color_matrix=bt709");
         bg.Add("format=yuv420p");
 
-        var cam = new List<string>();
-        if (o.WebcamMirror) cam.Add("hflip");
-        cam.Add($"scale={camW}:-2:flags=bicubic");
-        cam.Add("format=yuv420p");
-
-        string pos = o.WebcamCorner switch
-        {
-            WebcamCorner.BottomLeft => $"x={margin}:y=H-h-{margin}",
-            WebcamCorner.TopRight => $"x=W-w-{margin}:y={margin}",
-            WebcamCorner.TopLeft => $"x={margin}:y={margin}",
-            _ => $"x=W-w-{margin}:y=H-h-{margin}"
-        };
         string last = IsHardware(o.EncoderId) ? "nv12" : "yuv420p";
-        return $"[0:v]{string.Join(",", bg)}[bg];[1:v]{string.Join(",", cam)}[cam];[bg][cam]overlay={pos},format={last}[v]";
+        var g = new StringBuilder($"[0:v]{string.Join(",", bg)}[bg]");
+        string cur = "bg";
+
+        if (cam)
+        {
+            int camW = WebcamWidthFor(w, o.WebcamPercent);
+            var c = new List<string>();
+            if (o.WebcamMirror) c.Add("hflip");
+            c.Add($"scale={camW}:-2:flags=bicubic");
+            c.Add("format=yuv420p");
+            string pos = o.WebcamCorner switch
+            {
+                WebcamCorner.BottomLeft => $"x={margin}:y=H-h-{margin}",
+                WebcamCorner.TopRight => $"x=W-w-{margin}:y={margin}",
+                WebcamCorner.TopLeft => $"x={margin}:y={margin}",
+                _ => $"x=W-w-{margin}:y=H-h-{margin}"
+            };
+            g.Append($";[1:v]{string.Join(",", c)}[cam];[bg][cam]overlay={pos}");
+            if (wm) { g.Append("[withcam]"); cur = "withcam"; }
+            else { g.Append($",format={last}[v]"); return g.ToString(); }
+        }
+
+        // Watermark: always the bottom-right corner, on top of everything (also on top of the camera picture).
+        int wmIndex = cam ? 2 : 1;
+        g.Append($";[{wmIndex}:v]scale={WatermarkWidthFor(w)}:-2:flags=bicubic,format=yuva420p[wm];" +
+                 $"[{cur}][wm]overlay=x=W-w-{margin}:y=H-h-{margin},format={last}[v]");
+        return g.ToString();
     }
 
     private static string CpuFilter(EncoderOptions o, bool fromGpuFrames)

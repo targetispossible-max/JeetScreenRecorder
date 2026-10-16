@@ -17,6 +17,7 @@ using JeetScreenRecorder.Storage;
 using JeetScreenRecorder.Utils;
 using JeetScreenRecorder.VideoEncoding;
 using JeetScreenRecorder.Webcam;
+using JeetScreenRecorder.Licensing;
 
 namespace JeetScreenRecorder.UI;
 
@@ -46,6 +47,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly IWindowService _windows;
     private readonly IStorageService _storage;
     private readonly IWebcamService _webcam;
+    private readonly LicenseService _license;
     private readonly RecordingSettings _s;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(100) };
     private string _message = "";
@@ -71,6 +73,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand TestAudioCommand { get; }
     public RelayCommand DetectCamerasCommand { get; }
     public RelayCommand TestCameraCommand { get; }
+    public RelayCommand LicenseCommand { get; }
+    public RelayCommand BuyLicenseCommand { get; }
 
     public int[] FpsOptions { get; } = { 24, 30, 48, 50, 60 };
     public string[] ResolutionOptions { get; } =
@@ -90,7 +94,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public MainViewModel(IRecordingService rec, ISettingsService settings, IAudioCaptureService audio,
         IScreenshotService shot, IMonitorService monitors, IAnnotationService annotation,
-        IRegionSelector regions, IWindowService windows, IStorageService storage, IWebcamService webcam)
+        IRegionSelector regions, IWindowService windows, IStorageService storage, IWebcamService webcam,
+        LicenseService license)
     {
         _rec = rec;
         _settings = settings;
@@ -101,6 +106,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _windows = windows;
         _storage = storage;
         _webcam = webcam;
+        _license = license;
         _s = settings.Current;
         MonitorOptions = monitors.GetMonitors();
         MicOptions = audio.GetMicrophones();
@@ -122,6 +128,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         TestAudioCommand = new RelayCommand(ToggleTestAudio, () => _rec.State == RecordingState.Idle);
         DetectCamerasCommand = new RelayCommand(() => Run(DetectCamerasAsync), () => _rec.State == RecordingState.Idle);
         TestCameraCommand = new RelayCommand(() => Run(TestCameraAsync), () => _rec.State == RecordingState.Idle);
+
+        LicenseCommand = new RelayCommand(OpenLicenseWindow);
+        BuyLicenseCommand = new RelayCommand(OpenBuyPage);
 
         _rec.StateChanged += (_, _) => Refresh();
         _rec.Notice += (_, msg) => Application.Current.Dispatcher.Invoke(() => Message = msg);
@@ -315,6 +324,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(BarText));
         OnPropertyChanged(nameof(StatsText));
         OnPropertyChanged(nameof(EncoderText));
+        OnPropertyChanged(nameof(HasLicenseBadge));
+        OnPropertyChanged(nameof(LicenseBadgeText));
         if (++_tick % 20 == 0) UpdateEstimate();
     }
 
@@ -432,6 +443,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private static void TryExecute(RelayCommand c)
     {
         if (c.CanExecute(null)) c.Execute(null);
+    }
+
+    // Only a plain "License" button (to enter a key). No trial badge, no countdown, no blocking messages.
+    private void OpenLicenseWindow()
+    {
+        var win = new LicenseWindow(_license) { Owner = Application.Current.MainWindow };
+        win.ShowDialog();
+    }
+
+    /// <summary>Validity badge: shown only for an active license ("Licensed • Expires …"). No trial / countdown text is ever shown.</summary>
+    public bool HasLicenseBadge => _license.IsLicensed || _license.Status == LicenseStatus.Offline;
+    public string LicenseBadgeText => HasLicenseBadge ? _license.StatusLabel : "";
+
+    private void OpenBuyPage()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(LicenseApiClient.BuyPageUrl) { UseShellExecute = true });
+            Message = "Opening our website. After you pay, your license key is e-mailed to you. Click “Enter License Key” and paste it.";
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn("Could not open the buy page: " + ex.Message);
+            Message = "Could not open your browser. Please visit " + LicenseApiClient.BuyPageUrl + " to buy a license.";
+        }
     }
 
     public bool IsBusy => _rec.State != RecordingState.Idle;
@@ -844,6 +880,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanEditSettings));
         OnPropertyChanged(nameof(StatsText));
         OnPropertyChanged(nameof(EncoderText));
+        OnPropertyChanged(nameof(HasLicenseBadge));
+        OnPropertyChanged(nameof(LicenseBadgeText));
         StartCommand.Raise();
         PauseResumeCommand.Raise();
         StopCommand.Raise();

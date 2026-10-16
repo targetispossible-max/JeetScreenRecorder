@@ -36,6 +36,9 @@ public sealed record EncoderOptions
     public int WebcamPercent { get; init; } = 22;    // camera width as % of the video width
     public bool WebcamMirror { get; init; } = true;
 
+    /// <summary>PNG with the "Jeet Screen Recorder" mark that is burned into the bottom-right corner (null = none).</summary>
+    public string? WatermarkPath { get; init; }
+
     // Compatibility switches (used automatically when a graphics card does not support the best settings)
     public bool ForceCpuFrames { get; init; }        // never hand GPU frames straight to the encoder
     public bool BasicEncoderArgs { get; init; }      // skip optional quality switches of hardware encoders

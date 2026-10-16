@@ -29,7 +29,7 @@ public partial class LicenseWindow : Window
     private void Refresh()
     {
         // Status text
-        txtStatus.Text = _lic.StatusLabel;
+        txtStatus.Text = _lic.IsLicensed || _lic.Status == LicenseStatus.Offline ? _lic.StatusLabel : "Not activated";
         txtStatus.Foreground = _lic.Status switch
         {
             LicenseStatus.Licensed  => new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E)),
@@ -52,17 +52,17 @@ public partial class LicenseWindow : Window
         }
         else if (_lic.IsTrialActive)
         {
-            txtDetail.Text = $"Free trial: {_lic.TrialDaysLeft} day(s) remaining.";
+            txtDetail.Text = "Enter a license key below to activate.";
             txtDetail.Foreground = new SolidColorBrush(Color.FromRgb(0xA3, 0xB3, 0xCF));
         }
         else if (_lic.Status == LicenseStatus.TrialExpired)
         {
-            txtDetail.Text = "Your free trial has ended. Please buy a license to continue screen recording.";
-            txtDetail.Foreground = new SolidColorBrush(Color.FromRgb(0xF0, 0x38, 0x4A));
+            txtDetail.Text = "Recordings include the Jeet Screen Recorder watermark. Activate or buy a license to remove it.";
+            txtDetail.Foreground = new SolidColorBrush(Color.FromRgb(0xFB, 0xBF, 0x24));
         }
         else if (_lic.Status == LicenseStatus.Expired)
         {
-            txtDetail.Text = "Your license has expired. Please buy or renew a license to continue screen recording.";
+            txtDetail.Text = "Your license has expired. Recordings include the watermark. Please renew to remove it.";
             txtDetail.Foreground = new SolidColorBrush(Color.FromRgb(0xF0, 0x38, 0x4A));
         }
         else

@@ -37,10 +37,21 @@
                     <TextBlock Text="Jeet Screen Recorder" Foreground="{StaticResource TextBrush}" FontSize="22" FontWeight="Bold"/>
                     <TextBlock Text="Record your screen in HD with webcam and clear sound" Foreground="{StaticResource Text2Brush}" FontSize="12.5" Margin="0,2,0,0"/>
                 </StackPanel>
-                <Border Grid.Column="2" CornerRadius="16" Padding="14,6" VerticalAlignment="Center"
-                        Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
-                    <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="SemiBold"/>
-                </Border>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border CornerRadius="16" Padding="14,6" VerticalAlignment="Center" Margin="0,0,8,0"
+                            Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                        <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="SemiBold"/>
+                    </Border>
+                    <Border CornerRadius="16" Padding="12,6" VerticalAlignment="Center" Margin="0,0,8,0"
+                            Background="#1A3A2A" BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                            Visibility="{Binding HasLicenseBadge, Converter={StaticResource B2V}}">
+                        <TextBlock Text="{Binding LicenseBadgeText}" Foreground="{StaticResource TextBrush}" FontSize="12" FontWeight="SemiBold"/>
+                    </Border>
+                    <Button Content="🛒 Buy License" Command="{Binding BuyLicenseCommand}"
+                            Style="{StaticResource SmallButton}" VerticalAlignment="Center" Margin="0,0,8,0" ToolTip="Buy a license on our website"/>
+                    <Button Content="🔑 Enter License Key" Command="{Binding LicenseCommand}"
+                            Style="{StaticResource SmallButton}" VerticalAlignment="Center" ToolTip="Activate your license key"/>
+                </StackPanel>
             </Grid>
         </Border>
 

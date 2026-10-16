@@ -231,6 +231,34 @@ public class EncodingTests
     }
 
     [Fact]
+    public void Watermark_IsOverlaidBottomRight_AndForcesFilterGraph()
+    {
+        var o = Opts("h264_nvenc") with { WatermarkPath = @"C:\x\mark.png" };
+        var a = FfmpegArgsBuilder.Build(o, "out.mkv");
+        Assert.Contains("-i \"C:\\x\\mark.png\"", a);
+        Assert.Contains("-filter_complex", a);
+        Assert.Contains("hwdownload", a);                 // GPU frames must be copied to the CPU to be marked
+        Assert.Contains("scale=384:-2", a);               // ~20 % of 1920
+        Assert.Contains("overlay=x=W-w-24:y=H-h-24", a);
+        Assert.DoesNotContain("-i \"C:", FfmpegArgsBuilder.Build(Opts("libx264"), "out.mkv"));
+    }
+
+    [Fact]
+    public void Watermark_WithWebcam_UsesThirdInput()
+    {
+        var o = Opts("libx264") with { WatermarkPath = "m.png", WebcamName = "Cam" };
+        var a = FfmpegArgsBuilder.Build(o, "out.mkv");
+        Assert.Contains("[2:v]scale=", a);
+        Assert.Contains("[withcam][wm]overlay", a);
+    }
+
+    [Fact]
+    public void Trial_WatermarkStartsOnDayEight()
+    {
+        Assert.Equal(7, Utils.TrialPolicy.FreeDays);
+    }
+
+    [Fact]
     public void Mux_Stretch_AddsTimestampFilter_OnlyWhenNeeded()
     {
         var a = FfmpegArgsBuilder.BuildMux("v.mkv", "a.pcm", 0, 48000, 192, "o.mkv", 1.5);

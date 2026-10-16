@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using JeetScreenRecorder.Audio;
 using JeetScreenRecorder.Capture;
+using JeetScreenRecorder.Licensing;
 using JeetScreenRecorder.Models;
 using JeetScreenRecorder.Settings;
 using JeetScreenRecorder.Storage;
@@ -23,6 +24,7 @@ public sealed class RecordingService : IRecordingService
     private readonly IMonitorService _monitors;
     private readonly IAudioCaptureService _audio;
     private readonly Func<IVideoEncoder> _encoderFactory;
+    private readonly LicenseService _license;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Stopwatch _clock = new();
     private readonly List<string> _segments = new();
@@ -49,7 +51,8 @@ public sealed class RecordingService : IRecordingService
     private readonly Stopwatch _segWall = new();   // real time since the first video frame of the current segment
 
     public RecordingService(ISettingsService settings, IStorageService storage, IEncoderDetector detector,
-        IMonitorService monitors, IAudioCaptureService audio, Func<IVideoEncoder> encoderFactory)
+        IMonitorService monitors, IAudioCaptureService audio, Func<IVideoEncoder> encoderFactory,
+        LicenseService license)
     {
         _settings = settings;
         _storage = storage;
@@ -57,6 +60,7 @@ public sealed class RecordingService : IRecordingService
         _monitors = monitors;
         _audio = audio;
         _encoderFactory = encoderFactory;
+        _license = license;
         _audio.Warning += (_, msg) => Notice?.Invoke(this, msg);
     }
 
@@ -105,6 +109,7 @@ public sealed class RecordingService : IRecordingService
                 throw new InvalidOperationException("Not enough free disk space to start recording. Free some space or change the output folder.");
 
             await EnsureEncodersAsync();
+            await _license.WaitForCheckAsync(4000);
             var enc = EncoderSelector.Choose(_available!, s.Codec, s.Encoder);
             _opts = BuildOptions(s, enc);
             _encName = enc.DisplayName;
@@ -433,7 +438,9 @@ public sealed class RecordingService : IRecordingService
             AudioSampleRate = s.AudioSampleRate,
             AudioBitrateKbps = s.AudioBitrateKbps,
             BasicEncoderArgs = enc.BasicOnly,
-            X264Preset = SoftwarePreset()
+            X264Preset = SoftwarePreset(),
+            // After the free period (and without a valid license) the Jeet watermark is added to the picture.
+            WatermarkPath = _license.WatermarkRequired ? WatermarkImage.Ensure() : null
         };
     }
 
