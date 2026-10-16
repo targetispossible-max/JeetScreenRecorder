@@ -34,6 +34,7 @@ jobs:
           dotnet publish src/JeetScreenRecorder/JeetScreenRecorder.csproj
           -c Release -r win-x64 --self-contained true
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false
           -o publish
 
       - name: Bundle FFmpeg (users need no manual install)
@@ -45,7 +46,6 @@ jobs:
           New-Item -ItemType Directory -Force publish/ffmpeg | Out-Null
           $bin = Join-Path (Get-ChildItem ffmpeg-tmp -Directory | Select-Object -First 1).FullName "bin"
           Copy-Item (Join-Path $bin "ffmpeg.exe") "publish/ffmpeg/"
-          Copy-Item (Join-Path $bin "ffprobe.exe") "publish/ffmpeg/"
 
       - name: Zip portable build
         shell: pwsh
