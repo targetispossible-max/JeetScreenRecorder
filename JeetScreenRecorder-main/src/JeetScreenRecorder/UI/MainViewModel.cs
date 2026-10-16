@@ -74,6 +74,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public RelayCommand DetectCamerasCommand { get; }
     public RelayCommand TestCameraCommand { get; }
     public RelayCommand LicenseCommand { get; }
+    public RelayCommand BuyLicenseCommand { get; }
 
     public int[] FpsOptions { get; } = { 24, 30, 48, 50, 60 };
     public string[] ResolutionOptions { get; } =
@@ -129,6 +130,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         TestCameraCommand = new RelayCommand(() => Run(TestCameraAsync), () => _rec.State == RecordingState.Idle);
 
         LicenseCommand = new RelayCommand(OpenLicenseWindow);
+        BuyLicenseCommand = new RelayCommand(OpenBuyPage);
 
         _rec.StateChanged += (_, _) => Refresh();
         _rec.Notice += (_, msg) => Application.Current.Dispatcher.Invoke(() => Message = msg);
@@ -446,6 +448,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         var win = new LicenseWindow(_license) { Owner = Application.Current.MainWindow };
         win.ShowDialog();
+    }
+
+    private void OpenBuyPage()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(LicenseApiClient.BuyPageUrl) { UseShellExecute = true });
+            Message = "Opening our website. After you pay, your license key is e-mailed to you. Click “Enter License Key” and paste it.";
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn("Could not open the buy page: " + ex.Message);
+            Message = "Could not open your browser. Please visit " + LicenseApiClient.BuyPageUrl + " to buy a license.";
+        }
     }
 
     public bool IsBusy => _rec.State != RecordingState.Idle;

@@ -42,8 +42,10 @@
                             Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
                         <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="SemiBold"/>
                     </Border>
-                    <Button Content="🔑 License" Command="{Binding LicenseCommand}"
-                            Style="{StaticResource SmallButton}" VerticalAlignment="Center" ToolTip="Enter a license key"/>
+                    <Button Content="🛒 Buy License" Command="{Binding BuyLicenseCommand}"
+                            Style="{StaticResource SmallButton}" VerticalAlignment="Center" Margin="0,0,8,0" ToolTip="Buy a license on our website"/>
+                    <Button Content="🔑 Enter License Key" Command="{Binding LicenseCommand}"
+                            Style="{StaticResource SmallButton}" VerticalAlignment="Center" ToolTip="Activate your license key"/>
                 </StackPanel>
             </Grid>
         </Border>
