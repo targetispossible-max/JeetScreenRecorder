@@ -90,7 +90,7 @@ public sealed class FfmpegSegmentEncoder : IVideoEncoder
         }
         catch { /* process may already be gone */ }
 
-        var done = await Task.Run(() => p.WaitForExit(15000));
+        var done = await Task.Run(() => p.WaitForExit(60000));
         if (!done)
         {
             AppLogger.Warn("ffmpeg did not exit in time and was killed");

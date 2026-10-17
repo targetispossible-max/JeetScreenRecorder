@@ -65,7 +65,8 @@ public sealed class RecordingService : IRecordingService
     }
 
     public RecordingState State { get; private set; } = RecordingState.Idle;
-    public TimeSpan Elapsed => _clock.Elapsed;
+    /// <summary>Time of the current recording. Back to 00:00:00 as soon as the recording is saved, so the next one starts from zero on screen.</summary>
+    public TimeSpan Elapsed => State == RecordingState.Idle ? TimeSpan.Zero : _clock.Elapsed;
     public RecordingStats Stats { get; private set; } = RecordingStats.Empty;
     public string? LastOutputPath { get; private set; }
     public event EventHandler? StateChanged;
